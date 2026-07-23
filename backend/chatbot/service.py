@@ -12,6 +12,28 @@ from backend.rag.retriever import PineconeRetriever, RetrievedChunk, format_cont
 
 logger = logging.getLogger(__name__)
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
+FAST_ACKNOWLEDGEMENTS = {
+    "yes",
+    "yeah",
+    "yep",
+    "ok",
+    "okay",
+    "sure",
+}
+FAST_GREETINGS = {
+    "hi",
+    "hii",
+    "hello",
+    "hey",
+    "hru",
+    "how are you",
+    "how are you?",
+}
+FAST_GRATITUDE = {
+    "thanks",
+    "thank you",
+    "thx",
+}
 
 
 @dataclass(frozen=True)
@@ -39,6 +61,16 @@ class ChatbotService:
     def chat(self, message: str, session_id: str | None = None) -> ChatResponse:
         active_session_id = session_id or str(uuid4())
         memory = self.memory_store.get(active_session_id)
+        fast_analysis = self._fast_social_analysis(message)
+        if fast_analysis:
+            answer = self._sanitize_response(self._handle_message(message, fast_analysis, memory))
+            self._remember(memory, message, answer, fast_analysis)
+            return ChatResponse(
+                response=answer,
+                session_id=active_session_id,
+                intent=fast_analysis.primary_label(),
+            )
+
         history = memory.as_text()
         analysis = self.intent_analyzer.analyze(message, history)
         logger.info("Intent analysis: %s", analysis)
@@ -53,6 +85,19 @@ class ChatbotService:
 
     def clear_memory(self, session_id: str) -> None:
         self.memory_store.clear(session_id)
+
+    def _fast_social_analysis(self, message: str) -> IntentAnalysis | None:
+        normalized = re.sub(r"\s+", " ", message.strip().lower())
+        normalized = normalized.strip(" .!?")
+        if normalized in FAST_GRATITUDE:
+            return IntentAnalysis(intents=["gratitude"], gratitude=True, confidence=1.0)
+        if normalized in FAST_GREETINGS or normalized in FAST_ACKNOWLEDGEMENTS:
+            return IntentAnalysis(
+                intents=["acknowledgement"],
+                acknowledgement=True,
+                confidence=1.0,
+            )
+        return None
 
     def _handle_message(
         self,

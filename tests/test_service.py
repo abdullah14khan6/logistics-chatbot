@@ -7,8 +7,10 @@ from backend.rag.retriever import RetrievedChunk
 class FakeAnalyzer:
     def __init__(self, analyses: list[IntentAnalysis]) -> None:
         self.analyses = analyses
+        self.calls = 0
 
     def analyze(self, message: str, history: str) -> IntentAnalysis:
+        self.calls += 1
         return self.analyses.pop(0)
 
 
@@ -198,6 +200,21 @@ def test_gratitude_response_is_natural() -> None:
     result = service(analysis).chat("thanks", "s1")
 
     assert "welcome" in result.response.lower() or "happy to help" in result.response.lower()
+
+
+def test_short_greeting_skips_llm_analyzer() -> None:
+    analyzer = FakeAnalyzer([])
+    bot = ChatbotService(
+        settings(),
+        retriever=FakeRetriever(),
+        generator=FakeGenerator(),
+        intent_analyzer=analyzer,
+    )
+
+    result = bot.chat("hi", "s1")
+
+    assert result.intent == "acknowledgement"
+    assert analyzer.calls == 0
 
 
 def test_response_sanitizer_removes_rag_language() -> None:
