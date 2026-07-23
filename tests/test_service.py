@@ -171,6 +171,27 @@ def test_contact_card_memory_avoids_repeating_details() -> None:
     assert "Name:\nUsama Shahid" not in second.response
 
 
+def test_head_of_services_uses_env_contact_without_rag() -> None:
+    analysis = IntentAnalysis(
+        intents=["head_of_services"],
+        needs_head_of_services=True,
+        needs_handoff=True,
+        show_contact_details=True,
+    )
+    retriever = FakeRetriever()
+    generator = FakeGenerator()
+
+    result = service(analysis, retriever=retriever, generator=generator).chat(
+        "service head information",
+        "s1",
+    )
+
+    assert "Name:\nUsama Shahid" in result.response
+    assert "Email:\nhos@example.com" in result.response
+    assert retriever.calls == 0
+    assert generator.calls == 0
+
+
 def test_gratitude_response_is_natural() -> None:
     analysis = IntentAnalysis(intents=["gratitude"], gratitude=True)
 
@@ -193,6 +214,23 @@ def test_response_sanitizer_removes_rag_language() -> None:
 
     assert "retrieved" not in result.response.lower()
     assert "According to" not in result.response
+
+
+def test_response_sanitizer_removes_unauthorized_staff_emails() -> None:
+    analysis = IntentAnalysis(
+        intents=["warehousing"],
+        company_specific=True,
+        needs_rag=True,
+    )
+    generator = FakeGenerator(
+        "You can contact the warehouse team at warehouse@example.com or "
+        "the Head of Services at hos@example.com."
+    )
+
+    result = service(analysis, generator=generator).chat("warehousing contact?", "s1")
+
+    assert "warehouse@example.com" not in result.response
+    assert "hos@example.com" in result.response
 
 
 def test_soft_handoff_is_not_repeated_every_turn() -> None:

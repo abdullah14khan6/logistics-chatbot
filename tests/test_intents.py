@@ -23,3 +23,15 @@ def test_json_from_text_accepts_fenced_json() -> None:
 
     assert data["intents"] == ["warehousing"]
 
+
+def test_head_of_services_flag_parses() -> None:
+    analysis = IntentAnalysis.from_dict(
+        {
+            "intents": ["head_of_services"],
+            "needs_head_of_services": True,
+            "needs_handoff": True,
+        }
+    )
+
+    assert analysis.needs_head_of_services
+    assert analysis.primary_label() == "head_of_services"

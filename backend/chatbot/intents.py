@@ -17,6 +17,7 @@ class IntentAnalysis:
     needs_tracking: bool = False
     needs_handoff: bool = False
     needs_pricing: bool = False
+    needs_head_of_services: bool = False
     prompt_injection: bool = False
     unrelated: bool = False
     unclear: bool = False
@@ -38,6 +39,7 @@ class IntentAnalysis:
             needs_tracking=bool(data.get("needs_tracking", False)),
             needs_handoff=bool(data.get("needs_handoff", False)),
             needs_pricing=bool(data.get("needs_pricing", False)),
+            needs_head_of_services=bool(data.get("needs_head_of_services", False)),
             prompt_injection=bool(data.get("prompt_injection", False)),
             unrelated=bool(data.get("unrelated", False)),
             unclear=bool(data.get("unclear", False)),
@@ -75,6 +77,7 @@ Available intent labels:
 - tracking
 - pricing
 - human_handoff
+- head_of_services
 - company_services
 - warehousing
 - customs
@@ -95,9 +98,16 @@ Rules:
 - Mark unrelated true for non-logistics tasks such as games, homework, sports, weather, malware,
   or general coding requests.
 - Mark unclear true for mostly nonsensical or too-vague messages.
+- Mark acknowledgement true for short greetings or casual social messages such as hello,
+  hi, hey, how are you, hru, ok, yes, or sure unless they include a logistics request.
 - Mark needs_tracking true only when the user is actually asking to track/check a shipment.
 - Mark needs_handoff true for pricing, quotations, custom solutions, consultation, or when a
   human should help after the assistant answers available information.
+- Mark needs_head_of_services true and include "head_of_services" when the user asks for
+  Head of Services, Service Head, service head information, or the contact person for services.
+  For this case, do not require company RAG unless the user also asks about other company services.
+- Example: "service head information" => intents ["head_of_services"], needs_head_of_services true,
+  needs_handoff true, show_contact_details true, needs_rag false.
 - Mark needs_rag true when company information is needed.
 - Mark general_logistics true when the user asks a general logistics concept question.
 - Use follow_up true when the user refers to a previous topic with words like that, those, it,
@@ -119,6 +129,7 @@ Return JSON with this schema:
   "needs_tracking": false,
   "needs_handoff": false,
   "needs_pricing": false,
+  "needs_head_of_services": false,
   "prompt_injection": false,
   "unrelated": false,
   "unclear": false,
@@ -185,4 +196,3 @@ def _json_from_text(text: str) -> dict[str, Any]:
     if start == -1 or end == -1:
         raise ValueError("No JSON object found")
     return json.loads(text[start : end + 1])
-

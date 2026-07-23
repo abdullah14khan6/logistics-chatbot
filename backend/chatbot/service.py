@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -10,6 +11,7 @@ from backend.rag.generator import GroqAnswerGenerator
 from backend.rag.retriever import PineconeRetriever, RetrievedChunk, format_context
 
 logger = logging.getLogger(__name__)
+EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
 
 
 @dataclass(frozen=True)
@@ -86,6 +88,9 @@ class ChatbotService:
         chunks = self._retrieve_company_chunks(message, analysis, memory)
         response_parts: list[str] = []
 
+        if analysis.needs_head_of_services:
+            response_parts.append(self._head_of_services_block(memory, analysis))
+
         if chunks or analysis.general_logistics:
             response_parts.append(self._generate_answer(message, analysis, memory, chunks))
         elif analysis.needs_rag or analysis.company_specific:
@@ -94,7 +99,7 @@ class ChatbotService:
         if analysis.needs_tracking:
             response_parts.append(self._tracking_block())
 
-        if analysis.needs_pricing or analysis.needs_handoff:
+        if (analysis.needs_pricing or analysis.needs_handoff) and not analysis.needs_head_of_services:
             response_parts.append(self._handoff_block(memory, analysis))
         elif self._should_soft_handoff(memory, analysis):
             memory.mark_handoff_suggested()
@@ -143,6 +148,8 @@ class ChatbotService:
             "Write one coherent customer-support response.",
             "Do not mention sources, PDFs, retrieval, context, chunks, pages, or tools.",
             "Do not invent company information.",
+            "Do not provide staff names, staff emails, phone numbers, or contact lists from company information unless the user explicitly asks for that exact contact.",
+            "For quotations, pricing, service consultation, or Head of Services contact, do not provide contact details yourself; the controller will add the authorized Head of Services contact.",
             "Use bullets only when they improve readability.",
             "Do not repeat topics already explained unless the user asks for repetition.",
         ]
@@ -198,6 +205,19 @@ class ChatbotService:
             f"{self.settings.head_of_services_phone}"
         )
 
+    def _head_of_services_block(
+        self,
+        memory: ConversationMemory,
+        analysis: IntentAnalysis,
+    ) -> str:
+        if memory.contact_card_shown and not analysis.show_contact_details:
+            return (
+                "As mentioned earlier, our Head of Services is "
+                f"{self.settings.head_of_services_name}. They can help with service guidance, "
+                "pricing, quotations, and logistics consultation."
+            )
+        return self._handoff_block(memory, analysis)
+
     def _unavailable_company_info(self, analysis: IntentAnalysis) -> str:
         topic = ", ".join(analysis.intents) if analysis.intents else "that"
         return (
@@ -227,6 +247,7 @@ class ChatbotService:
         return (
             analysis.needs_tracking
             or analysis.needs_pricing
+            or analysis.needs_head_of_services
             or analysis.needs_handoff
             or analysis.needs_rag
             or analysis.company_specific
@@ -251,6 +272,7 @@ class ChatbotService:
                     "tracking",
                     "pricing",
                     "human_handoff",
+                    "head_of_services",
                     "gratitude",
                     "acknowledgement",
                     "unclear",
@@ -276,7 +298,29 @@ class ChatbotService:
         cleaned = response
         for old, new in replacements.items():
             cleaned = cleaned.replace(old, new)
-        return cleaned.strip()
+        return self._remove_unauthorized_emails(cleaned).strip()
+
+    def _remove_unauthorized_emails(self, response: str) -> str:
+        allowed_email = self.settings.head_of_services_email.lower()
+        lines = []
+        for line in response.splitlines():
+            emails = EMAIL_RE.findall(line)
+            if not emails:
+                lines.append(line)
+                continue
+            unauthorized = [email for email in emails if email.lower() != allowed_email]
+            if unauthorized:
+                redacted = EMAIL_RE.sub(
+                    lambda match: match.group(0)
+                    if match.group(0).lower() == allowed_email
+                    else "",
+                    line,
+                ).strip(" ,;:-")
+                if redacted and not redacted.lower().endswith(("at", "email")):
+                    lines.append(redacted)
+                continue
+            lines.append(line)
+        return "\n".join(lines)
 
 
 def _gratitude_response(turn_count: int) -> str:
