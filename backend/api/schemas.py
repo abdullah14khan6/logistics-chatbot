@@ -15,3 +15,7 @@ class ChatResponseModel(BaseModel):
 class HealthResponse(BaseModel):
     status: str
 
+
+class ClearChatResponse(BaseModel):
+    cleared: bool
+    session_id: str

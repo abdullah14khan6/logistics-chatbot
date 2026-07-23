@@ -67,6 +67,7 @@ The API exposes:
 
 - `GET /health`
 - `POST /chat`
+- `POST /chat/clear/{session_id}`
 
 Example request:
 
@@ -97,3 +98,4 @@ or:
 - Tracking, pricing, and custom logistics requests are handled by deterministic intent routing before retrieval.
 - API keys and contact details belong in `.env`, not in source control.
 - If Tesseract is installed but not on `PATH`, set `TESSERACT_CMD` in `.env`.
+- `CORS_ORIGINS` accepts a comma-separated list of allowed website/widget origins.

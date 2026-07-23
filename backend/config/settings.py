@@ -30,6 +30,13 @@ def _env_float(name: str, default: float) -> float:
     return float(value) if value else default
 
 
+def _env_list(name: str, default: list[str] | None = None) -> list[str]:
+    value = os.environ.get(name)
+    if not value:
+        return default or []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 @dataclass(frozen=True, init=False)
 class Settings:
     groq_api_key: str
@@ -48,6 +55,7 @@ class Settings:
     retrieval_top_k: int
     groq_model_name: str
     groq_temperature: float
+    cors_origins: list[str]
     chunk_size: int
     chunk_overlap: int
     ocr_dpi: int
@@ -74,6 +82,7 @@ class Settings:
             "retrieval_top_k": _env_int("RETRIEVAL_TOP_K", 4),
             "groq_model_name": _env("GROQ_MODEL_NAME", "llama-3.3-70b-versatile"),
             "groq_temperature": _env_float("GROQ_TEMPERATURE", 0.2),
+            "cors_origins": _env_list("CORS_ORIGINS", ["http://localhost:8501"]),
             "chunk_size": _env_int("CHUNK_SIZE", 900),
             "chunk_overlap": _env_int("CHUNK_OVERLAP", 150),
             "ocr_dpi": _env_int("OCR_DPI", 300),
@@ -98,4 +107,3 @@ class Settings:
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-

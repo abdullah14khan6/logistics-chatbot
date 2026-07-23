@@ -56,6 +56,9 @@ class ChatbotService:
             intent=str(final_state["intent"]),
         )
 
+    def clear_memory(self, session_id: str) -> None:
+        self.memory_store.clear(session_id)
+
     def _build_graph(self):
         from langgraph.graph import END, StateGraph
 
@@ -128,4 +131,3 @@ class ChatbotService:
         memory = self.memory_store.get(session_id)
         memory.add_user_message(user_message)
         memory.add_ai_message(assistant_message)
-
