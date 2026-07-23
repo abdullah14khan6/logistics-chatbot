@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from uuid import uuid4
 
 import streamlit as st
@@ -10,11 +11,17 @@ from backend.utils.logging import configure_logging
 
 
 configure_logging()
+CHAT_TIMEOUT_SECONDS = 45
 
 
 @st.cache_resource
 def chatbot_service() -> ChatbotService:
     return ChatbotService(get_settings())
+
+
+@st.cache_resource
+def chat_executor() -> ThreadPoolExecutor:
+    return ThreadPoolExecutor(max_workers=2)
 
 
 def reset_chat() -> None:
@@ -109,13 +116,22 @@ def handle_prompt(prompt: str) -> None:
 
     with st.chat_message("assistant"):
         with st.spinner("Typing..."):
-            result = chatbot_service().chat(
-                message=prompt,
-                session_id=st.session_state.session_id,
+            future = chat_executor().submit(
+                chatbot_service().chat,
+                prompt,
+                st.session_state.session_id,
             )
-        st.markdown(result.response)
+            try:
+                result = future.result(timeout=CHAT_TIMEOUT_SECONDS)
+                response = result.response
+            except TimeoutError:
+                response = (
+                    "The request is taking longer than expected. Please try again with a "
+                    "more specific question, or restart the app if the connection is stuck."
+                )
+        st.markdown(response)
 
-    st.session_state.messages.append({"role": "assistant", "content": result.response})
+    st.session_state.messages.append({"role": "assistant", "content": response})
 
 
 def main() -> None:
@@ -142,4 +158,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

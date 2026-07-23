@@ -41,3 +41,9 @@ def test_unknown_intent_uses_rag() -> None:
     assert result.intent == Intent.RAG
     assert result.response is None
 
+
+def test_acknowledgement_does_not_use_rag() -> None:
+    result = make_router().detect("yes")
+
+    assert result.intent == Intent.ACKNOWLEDGEMENT
+    assert "Please ask me" in result.response

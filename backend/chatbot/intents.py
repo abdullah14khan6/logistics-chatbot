@@ -5,6 +5,7 @@ from backend.config.settings import Settings
 
 
 class Intent(StrEnum):
+    ACKNOWLEDGEMENT = "acknowledgement"
     SHIPMENT_TRACKING = "shipment_tracking"
     PRICING = "pricing"
     CUSTOM_SOLUTION = "custom_solution"
@@ -52,13 +53,36 @@ GENERAL_LOGISTICS_KEYWORDS = (
     "air freight",
 )
 
+ACKNOWLEDGEMENTS = (
+    "yes",
+    "yeah",
+    "yep",
+    "ok",
+    "okay",
+    "sure",
+    "thanks",
+    "thank you",
+    "hi",
+    "hello",
+    "hey",
+)
+
 
 class IntentRouter:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
     def detect(self, message: str) -> IntentResult:
-        normalized = message.lower()
+        normalized = message.lower().strip()
+        if normalized in ACKNOWLEDGEMENTS:
+            return IntentResult(
+                intent=Intent.ACKNOWLEDGEMENT,
+                response=(
+                    "Sure. Please ask me about Paramount Logistics services, shipment "
+                    "tracking, pricing, or a custom logistics requirement."
+                ),
+            )
+
         if self._contains(normalized, TRACKING_KEYWORDS):
             return IntentResult(
                 intent=Intent.SHIPMENT_TRACKING,
@@ -98,4 +122,3 @@ class IntentRouter:
     @staticmethod
     def _contains(message: str, keywords: tuple[str, ...]) -> bool:
         return any(keyword in message for keyword in keywords)
-

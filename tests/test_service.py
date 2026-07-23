@@ -45,6 +45,19 @@ def test_special_intent_does_not_retrieve() -> None:
     assert generator.calls == 0
 
 
+def test_acknowledgement_does_not_retrieve() -> None:
+    retriever = FakeRetriever()
+    generator = FakeGenerator()
+    service = ChatbotService(settings(), retriever=retriever, generator=generator)
+
+    result = service.chat("yes", session_id="test-session")
+
+    assert result.intent == Intent.ACKNOWLEDGEMENT
+    assert "Please ask me" in result.response
+    assert retriever.calls == 0
+    assert generator.calls == 0
+
+
 def test_rag_uses_retrieved_context() -> None:
     retriever = FakeRetriever(
         [
@@ -68,4 +81,3 @@ def test_rag_uses_retrieved_context() -> None:
     assert result.response == "answer for What services are offered?"
     assert retriever.calls == 1
     assert generator.calls == 1
-
