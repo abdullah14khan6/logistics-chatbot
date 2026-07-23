@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import shutil
 from pathlib import Path
 
 import fitz
@@ -21,6 +22,7 @@ class PdfOcrExtractor:
             pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
 
     def extract(self, pdf_path: Path) -> list[PageText]:
+        self._ensure_tesseract_available()
         pages: list[PageText] = []
         with fitz.open(pdf_path) as document:
             for page_index, page in enumerate(document, start=1):
@@ -31,3 +33,11 @@ class PdfOcrExtractor:
                     pages.append(PageText(page_number=page_index, text=text))
         return pages
 
+    def _ensure_tesseract_available(self) -> None:
+        configured = pytesseract.pytesseract.tesseract_cmd
+        if shutil.which(configured) or Path(configured).exists():
+            return
+        raise RuntimeError(
+            "Tesseract OCR is not available. Install Tesseract and ensure it is on PATH, "
+            "or set TESSERACT_CMD in .env to the full tesseract executable path."
+        )

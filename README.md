@@ -29,6 +29,14 @@ pip install -r requirements.txt
 3. Install Tesseract OCR on the host machine and ensure `tesseract` is on `PATH`.
 4. Create `.env` from `.env.example` and fill in the private values.
 
+## Preflight Check
+
+```bash
+.venv\Scripts\python.exe preflight.py
+```
+
+This verifies installed packages, `.env`, PDF inputs, and Tesseract availability before ingestion.
+
 ## Ingest Documents
 
 Place company PDFs in `data/`, then run:
@@ -88,3 +96,4 @@ or:
 - Retrieved chunk text is stored in Pinecone metadata under `text` for the chatbot module.
 - Tracking, pricing, and custom logistics requests are handled by deterministic intent routing before retrieval.
 - API keys and contact details belong in `.env`, not in source control.
+- If Tesseract is installed but not on `PATH`, set `TESSERACT_CMD` in `.env`.
