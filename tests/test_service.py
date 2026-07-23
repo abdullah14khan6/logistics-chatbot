@@ -202,7 +202,7 @@ def test_gratitude_response_is_natural() -> None:
     assert "welcome" in result.response.lower() or "happy to help" in result.response.lower()
 
 
-def test_short_greeting_skips_llm_analyzer() -> None:
+def test_greeting_is_warm_and_skips_analyzer() -> None:
     analyzer = FakeAnalyzer([])
     bot = ChatbotService(
         settings(),
@@ -213,8 +213,28 @@ def test_short_greeting_skips_llm_analyzer() -> None:
 
     result = bot.chat("hi", "s1")
 
-    assert result.intent == "acknowledgement"
+    assert result.intent == "greeting"
+    assert "Welcome" in result.response or "Hi" in result.response or "Hello" in result.response
+    assert "Tell me what you're shipping" not in result.response
     assert analyzer.calls == 0
+
+
+def test_small_talk_is_natural() -> None:
+    result = service(IntentAnalysis()).chat("how are you", "s1")
+
+    assert "thank" in result.response.lower() or "doing" in result.response.lower()
+
+
+def test_farewell_is_natural() -> None:
+    result = service(IntentAnalysis()).chat("bye", "s1")
+
+    assert "day" in result.response.lower() or "take care" in result.response.lower()
+
+
+def test_acknowledgement_without_pending_question_is_natural() -> None:
+    result = service(IntentAnalysis()).chat("yes", "s1")
+
+    assert "How can I help" in result.response or "What would you like" in result.response
 
 
 def test_response_sanitizer_removes_rag_language() -> None:

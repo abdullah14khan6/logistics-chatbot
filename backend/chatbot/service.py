@@ -25,9 +25,25 @@ FAST_GREETINGS = {
     "hii",
     "hello",
     "hey",
+    "hi there",
+    "good morning",
+    "good afternoon",
+    "good evening",
+}
+FAST_SMALL_TALK = {
     "hru",
     "how are you",
     "how are you?",
+    "how's it going",
+    "hows it going",
+    "how is it going",
+}
+FAST_FAREWELLS = {
+    "bye",
+    "goodbye",
+    "see you",
+    "take care",
+    "have a nice day",
 }
 FAST_GRATITUDE = {
     "thanks",
@@ -91,7 +107,13 @@ class ChatbotService:
         normalized = normalized.strip(" .!?")
         if normalized in FAST_GRATITUDE:
             return IntentAnalysis(intents=["gratitude"], gratitude=True, confidence=1.0)
-        if normalized in FAST_GREETINGS or normalized in FAST_ACKNOWLEDGEMENTS:
+        if normalized in FAST_FAREWELLS:
+            return IntentAnalysis(intents=["farewell"], farewell=True, confidence=1.0)
+        if normalized in FAST_SMALL_TALK:
+            return IntentAnalysis(intents=["small_talk"], small_talk=True, confidence=1.0)
+        if normalized in FAST_GREETINGS:
+            return IntentAnalysis(intents=["greeting"], greeting=True, confidence=1.0)
+        if normalized in FAST_ACKNOWLEDGEMENTS:
             return IntentAnalysis(
                 intents=["acknowledgement"],
                 acknowledgement=True,
@@ -121,11 +143,17 @@ class ChatbotService:
         if analysis.gratitude:
             return _gratitude_response(memory.user_message_count)
 
+        if analysis.farewell:
+            return _farewell_response(memory.user_message_count)
+
+        if analysis.greeting:
+            return _greeting_response(memory.user_message_count, has_context=bool(memory.last_topic))
+
+        if analysis.small_talk:
+            return _small_talk_response(memory.user_message_count)
+
         if analysis.acknowledgement and not self._needs_action(analysis):
-            return (
-                "Sure. Tell me what you're shipping, where it's going, or which logistics "
-                "service you'd like to understand."
-            )
+            return self._acknowledgement_response(memory)
 
         if analysis.unclear and not self._needs_action(analysis):
             return _fallback_response(memory.user_message_count)
@@ -273,6 +301,7 @@ class ChatbotService:
 
     def _ask_follow_up(self, analysis: IntentAnalysis) -> str:
         if analysis.needs_pricing or "shipping" in analysis.intents:
+            memory.remember_pending_question("shipping")
             return (
                 "I can help narrow that down. Is the shipment domestic or international, "
                 "what is the approximate weight or volume, and where is it going?"
@@ -320,12 +349,32 @@ class ChatbotService:
                     "head_of_services",
                     "gratitude",
                     "acknowledgement",
+                    "greeting",
+                    "small_talk",
+                    "farewell",
                     "unclear",
                     "unrelated",
                     "prompt_injection",
                 }
             ]
         )
+        if not analysis.acknowledgement:
+            memory.clear_pending_question()
+
+    def _acknowledgement_response(self, memory: ConversationMemory) -> str:
+        if memory.pending_question_topic:
+            topic = memory.pending_question_topic
+            memory.clear_pending_question()
+            if memory.last_topic:
+                return (
+                    f"Certainly. Continuing with {memory.last_topic}, what would you like "
+                    "me to explain next?"
+                )
+            return (
+                f"Absolutely. To continue with {topic}, please share a little more detail "
+                "so I can guide you properly."
+            )
+        return _acknowledgement_response(memory.user_message_count)
 
     def _sanitize_response(self, response: str) -> str:
         replacements = {
@@ -370,9 +419,55 @@ class ChatbotService:
 
 def _gratitude_response(turn_count: int) -> str:
     options = [
-        "You're very welcome. If you need help with a shipment or logistics service, I'm here to help.",
-        "Happy to help. Let me know if you'd like to understand any service in more detail.",
-        "You're welcome. If you're planning a shipment, I can also help you identify the right service.",
+        "You're very welcome! If you have any other questions, I'm happy to help.",
+        "My pleasure! Let me know if there's anything else I can assist you with.",
+        "Happy to help! Feel free to reach out if you need anything else.",
+        "You're welcome! Have a wonderful day.",
+    ]
+    return options[turn_count % len(options)]
+
+
+def _greeting_response(turn_count: int, has_context: bool = False) -> str:
+    if has_context:
+        options = [
+            "Hi again! How can I help you further?",
+            "Hello again! What would you like to continue with?",
+            "Welcome back. How may I assist you now?",
+        ]
+    else:
+        options = [
+            "Hello! Welcome to Paramount Logistics. How can I assist you today?",
+            "Hi! It's great to have you here. How can I help you today?",
+            "Hello! How may I assist you with your logistics or shipping needs today?",
+            "Hi there! I'm here to help with your questions today.",
+            "Welcome to Paramount Logistics! What can I help you with today?",
+        ]
+    return options[turn_count % len(options)]
+
+
+def _small_talk_response(turn_count: int) -> str:
+    options = [
+        "I'm doing well, thank you for asking! How can I assist you today?",
+        "I'm doing great, thanks! How may I help you today?",
+        "I'm well, thank you. What can I help you with today?",
+    ]
+    return options[turn_count % len(options)]
+
+
+def _acknowledgement_response(turn_count: int) -> str:
+    options = [
+        "Of course! How can I help?",
+        "Certainly. What would you like to know?",
+        "Absolutely! How may I assist you today?",
+    ]
+    return options[turn_count % len(options)]
+
+
+def _farewell_response(turn_count: int) -> str:
+    options = [
+        "Thank you for contacting Paramount Logistics. Have a wonderful day!",
+        "Take care! If you need any assistance in the future, we're always here to help.",
+        "Goodbye, and thank you for choosing Paramount Logistics!",
     ]
     return options[turn_count % len(options)]
 

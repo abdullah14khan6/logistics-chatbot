@@ -16,6 +16,7 @@ class ConversationMemory:
     user_message_count: int = 0
     last_topic: str = ""
     last_handoff_suggestion_at: int = 0
+    pending_question_topic: str = ""
 
     def add_user_message(self, message: str) -> None:
         self.user_message_count += 1
@@ -34,6 +35,7 @@ class ConversationMemory:
         self.user_message_count = 0
         self.last_topic = ""
         self.last_handoff_suggestion_at = 0
+        self.pending_question_topic = ""
 
     def remember_topics(self, topics: list[str]) -> None:
         for topic in topics:
@@ -47,6 +49,12 @@ class ConversationMemory:
 
     def mark_handoff_suggested(self) -> None:
         self.last_handoff_suggestion_at = self.user_message_count
+
+    def remember_pending_question(self, topic: str) -> None:
+        self.pending_question_topic = topic.strip().lower()
+
+    def clear_pending_question(self) -> None:
+        self.pending_question_topic = ""
 
     def _append(self, role: str, content: str) -> None:
         self._turns.append(ChatTurn(role=role, content=content))

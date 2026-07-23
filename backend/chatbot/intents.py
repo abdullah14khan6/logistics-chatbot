@@ -23,6 +23,9 @@ class IntentAnalysis:
     unclear: bool = False
     acknowledgement: bool = False
     gratitude: bool = False
+    greeting: bool = False
+    small_talk: bool = False
+    farewell: bool = False
     follow_up: bool = False
     show_contact_details: bool = False
     user_situation: str = ""
@@ -45,6 +48,9 @@ class IntentAnalysis:
             unclear=bool(data.get("unclear", False)),
             acknowledgement=bool(data.get("acknowledgement", False)),
             gratitude=bool(data.get("gratitude", False)),
+            greeting=bool(data.get("greeting", False)),
+            small_talk=bool(data.get("small_talk", False)),
+            farewell=bool(data.get("farewell", False)),
             follow_up=bool(data.get("follow_up", False)),
             show_contact_details=bool(data.get("show_contact_details", False)),
             user_situation=str(data.get("user_situation", "")).strip(),
@@ -61,6 +67,12 @@ class IntentAnalysis:
             return "unclear"
         if self.gratitude:
             return "gratitude"
+        if self.farewell:
+            return "farewell"
+        if self.greeting:
+            return "greeting"
+        if self.small_talk:
+            return "small_talk"
         if self.acknowledgement:
             return "acknowledgement"
         return ",".join(self.intents) or "conversation"
