@@ -16,6 +16,8 @@ This first increment includes:
 - Pinecone retrieval and Groq answer generation modules.
 - FastAPI `/chat` and `/health` endpoints.
 - Temporary Streamlit testing interface.
+- LLM-based intent analysis before retrieval or response generation.
+- Multi-intent conversation controller for tracking, pricing, handoff, company RAG, general logistics, and follow-ups.
 
 ## Current Ingestion Status
 
@@ -99,10 +101,14 @@ or:
 ## Notes
 
 - The embedding model is `BAAI/bge-base-en-v1.5` with 768-dimensional vectors.
+- User messages are first analyzed by `INTENT_MODEL_NAME`, which returns structured JSON for the conversation controller.
+- The controller executes all required actions in one response instead of choosing only one keyword route.
+- Prompt-injection, secrets, unrelated tasks, and invented company facts are refused before retrieval.
+- Low-confidence Pinecone matches below `RETRIEVAL_MIN_SCORE` are not used for company answers.
 - If `PINECONE_HOST` is empty, ingestion creates the Pinecone serverless index when missing.
 - Pinecone index creation defaults to `PINECONE_CLOUD=aws` and `PINECONE_REGION=us-east-1`.
 - Retrieved chunk text is stored in Pinecone metadata under `text` for the chatbot module.
-- Tracking, pricing, and custom logistics requests are handled by deterministic intent routing before retrieval.
+- Tracking, pricing, and custom logistics requests are handled by the intent-analysis controller before retrieval.
 - API keys and contact details belong in `.env`, not in source control.
 - If Tesseract is installed but not on `PATH`, set `TESSERACT_CMD` in `.env`.
 - `CORS_ORIGINS` accepts a comma-separated list of allowed website/widget origins.

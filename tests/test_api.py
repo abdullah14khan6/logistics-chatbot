@@ -1,7 +1,6 @@
 from fastapi.testclient import TestClient
 
 from backend.api.main import app, get_chatbot_service
-from backend.chatbot.intents import Intent
 from backend.chatbot.service import ChatResponse
 
 
@@ -22,7 +21,7 @@ class FakeChatbotService:
         return ChatResponse(
             response=f"handled {message}",
             session_id=session_id or "generated-session",
-            intent=str(Intent.RAG),
+            intent="company_services",
         )
 
     def clear_memory(self, session_id: str) -> None:
@@ -44,7 +43,7 @@ def test_chat_endpoint_uses_service_dependency() -> None:
     assert response.json() == {
         "response": "handled hello",
         "session_id": "session-1",
-        "intent": str(Intent.RAG),
+        "intent": "company_services",
     }
 
 
@@ -59,3 +58,4 @@ def test_clear_chat_endpoint() -> None:
     assert response.status_code == 200
     assert response.json() == {"cleared": True, "session_id": "session-1"}
     assert fake_service.cleared_session_id == "session-1"
+

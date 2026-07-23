@@ -55,6 +55,8 @@ class Settings:
     pinecone_cloud: str
     pinecone_region: str
     retrieval_top_k: int
+    retrieval_min_score: float
+    intent_model_name: str
     groq_model_name: str
     groq_temperature: float
     cors_origins: list[str]
@@ -84,6 +86,8 @@ class Settings:
             "pinecone_cloud": _env("PINECONE_CLOUD", "aws"),
             "pinecone_region": _env("PINECONE_REGION", "us-east-1"),
             "retrieval_top_k": _env_int("RETRIEVAL_TOP_K", 4),
+            "retrieval_min_score": _env_float("RETRIEVAL_MIN_SCORE", 0.45),
+            "intent_model_name": _env("INTENT_MODEL_NAME", "llama-3.1-8b-instant"),
             "groq_model_name": _env("GROQ_MODEL_NAME", "llama-3.3-70b-versatile"),
             "groq_temperature": _env_float("GROQ_TEMPERATURE", 0.2),
             "cors_origins": _env_list("CORS_ORIGINS", ["http://localhost:8501"]),

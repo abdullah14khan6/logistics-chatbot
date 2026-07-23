@@ -72,13 +72,5 @@ class PineconeRetriever:
 
 def format_context(chunks: list[RetrievedChunk]) -> str:
     if not chunks:
-        return "No relevant company context was retrieved."
-    formatted = []
-    for chunk in chunks:
-        citation = (
-            f"{chunk.metadata.get('document_name', 'document')}, "
-            f"page {chunk.metadata.get('page_number', 'unknown')}, "
-            f"chunk {chunk.metadata.get('chunk_id', 'unknown')}"
-        )
-        formatted.append(f"[{citation}]\n{chunk.text}")
-    return "\n\n".join(formatted)
+        return "No company information was found."
+    return "\n\n".join(chunk.text for chunk in chunks)

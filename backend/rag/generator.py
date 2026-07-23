@@ -7,7 +7,14 @@ class GroqAnswerGenerator:
         self.settings = settings
         self._llm = None
 
-    def answer(self, question: str, context: str, history: str) -> str:
+    def answer(
+        self,
+        question: str,
+        context: str,
+        history: str,
+        intent_analysis: str = "",
+        controller_instructions: str = "",
+    ) -> str:
         messages = [
             ("system", RAG_SYSTEM_PROMPT),
             (
@@ -15,6 +22,11 @@ class GroqAnswerGenerator:
                 RAG_USER_PROMPT.format(
                     history=history or "No previous conversation.",
                     context=context,
+                    intent_analysis=intent_analysis or "No structured analysis provided.",
+                    controller_instructions=(
+                        controller_instructions
+                        or "Answer the user's logistics question professionally."
+                    ),
                     question=question,
                 ),
             ),
@@ -32,4 +44,3 @@ class GroqAnswerGenerator:
                 temperature=self.settings.groq_temperature,
             )
         return self._llm
-

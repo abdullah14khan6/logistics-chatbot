@@ -11,8 +11,14 @@ class ChatTurn:
 class ConversationMemory:
     max_turns: int = 12
     _turns: list[ChatTurn] = field(default_factory=list)
+    contact_card_shown: bool = False
+    explained_topics: set[str] = field(default_factory=set)
+    user_message_count: int = 0
+    last_topic: str = ""
+    last_handoff_suggestion_at: int = 0
 
     def add_user_message(self, message: str) -> None:
+        self.user_message_count += 1
         self._append("user", message)
 
     def add_ai_message(self, message: str) -> None:
@@ -23,6 +29,24 @@ class ConversationMemory:
 
     def clear(self) -> None:
         self._turns.clear()
+        self.contact_card_shown = False
+        self.explained_topics.clear()
+        self.user_message_count = 0
+        self.last_topic = ""
+        self.last_handoff_suggestion_at = 0
+
+    def remember_topics(self, topics: list[str]) -> None:
+        for topic in topics:
+            normalized = topic.strip().lower()
+            if normalized:
+                self.explained_topics.add(normalized)
+                self.last_topic = normalized
+
+    def recently_suggested_handoff(self, window: int = 4) -> bool:
+        return self.user_message_count - self.last_handoff_suggestion_at < window
+
+    def mark_handoff_suggested(self) -> None:
+        self.last_handoff_suggestion_at = self.user_message_count
 
     def _append(self, role: str, content: str) -> None:
         self._turns.append(ChatTurn(role=role, content=content))
@@ -42,4 +66,3 @@ class MemoryStore:
 
     def clear(self, session_id: str) -> None:
         self._sessions.pop(session_id, None)
-
