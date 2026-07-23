@@ -17,6 +17,12 @@ This first increment includes:
 - FastAPI `/chat` and `/health` endpoints.
 - Temporary Streamlit testing interface.
 
+## Current Ingestion Status
+
+The local PDF `data/paramount company data.pdf` has been ingested into Pinecone index
+`logistics-company-rag` with 24 vectors. The local ingestion manifest is ignored by Git
+and will skip unchanged PDFs on later runs.
+
 ## Setup
 
 1. Create and activate a Python 3.12+ virtual environment.
@@ -93,7 +99,8 @@ or:
 ## Notes
 
 - The embedding model is `BAAI/bge-base-en-v1.5` with 768-dimensional vectors.
-- Pinecone index creation is expected to be handled before ingestion so deployment teams can choose cloud, region, and index type deliberately.
+- If `PINECONE_HOST` is empty, ingestion creates the Pinecone serverless index when missing.
+- Pinecone index creation defaults to `PINECONE_CLOUD=aws` and `PINECONE_REGION=us-east-1`.
 - Retrieved chunk text is stored in Pinecone metadata under `text` for the chatbot module.
 - Tracking, pricing, and custom logistics requests are handled by deterministic intent routing before retrieval.
 - API keys and contact details belong in `.env`, not in source control.

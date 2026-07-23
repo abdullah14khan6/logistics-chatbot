@@ -5,7 +5,7 @@ from uuid import uuid5, NAMESPACE_URL
 from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from pinecone import Pinecone
+from pinecone import Pinecone, ServerlessSpec
 
 from backend.config.settings import Settings
 from backend.ingestion.manifest import IngestionManifest, file_sha256
@@ -105,6 +105,23 @@ class IngestionPipeline:
         client = Pinecone(api_key=self.settings.pinecone_api_key)
         if self.settings.pinecone_host:
             return client.Index(host=self.settings.pinecone_host)
+        if not client.has_index(self.settings.pinecone_index_name):
+            logger.info(
+                "Creating Pinecone index %s (%s dimensions, cosine, %s/%s)",
+                self.settings.pinecone_index_name,
+                self.settings.embedding_dimension,
+                self.settings.pinecone_cloud,
+                self.settings.pinecone_region,
+            )
+            client.create_index(
+                name=self.settings.pinecone_index_name,
+                dimension=self.settings.embedding_dimension,
+                metric="cosine",
+                spec=ServerlessSpec(
+                    cloud=self.settings.pinecone_cloud,
+                    region=self.settings.pinecone_region,
+                ),
+            )
         return client.Index(self.settings.pinecone_index_name)
 
     def _validate_configuration(self) -> None:
@@ -115,4 +132,3 @@ class IngestionPipeline:
             missing.append("PINECONE_INDEX_NAME or PINECONE_HOST")
         if missing:
             raise ValueError(f"Missing required ingestion setting(s): {', '.join(missing)}")
-

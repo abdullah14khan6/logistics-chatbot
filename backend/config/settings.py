@@ -52,6 +52,8 @@ class Settings:
     embedding_model_name: str
     embedding_dimension: int
     pinecone_namespace: str
+    pinecone_cloud: str
+    pinecone_region: str
     retrieval_top_k: int
     groq_model_name: str
     groq_temperature: float
@@ -79,6 +81,8 @@ class Settings:
             "embedding_model_name": _env("EMBEDDING_MODEL_NAME", "BAAI/bge-base-en-v1.5"),
             "embedding_dimension": _env_int("EMBEDDING_DIMENSION", 768),
             "pinecone_namespace": _env("PINECONE_NAMESPACE", "company-docs"),
+            "pinecone_cloud": _env("PINECONE_CLOUD", "aws"),
+            "pinecone_region": _env("PINECONE_REGION", "us-east-1"),
             "retrieval_top_k": _env_int("RETRIEVAL_TOP_K", 4),
             "groq_model_name": _env("GROQ_MODEL_NAME", "llama-3.3-70b-versatile"),
             "groq_temperature": _env_float("GROQ_TEMPERATURE", 0.2),
