@@ -15,6 +15,7 @@ This first increment includes:
 - LangGraph chatbot orchestration with intent routing.
 - Pinecone retrieval and Groq answer generation modules.
 - FastAPI `/chat` and `/health` endpoints.
+- Temporary Streamlit testing interface.
 
 ## Setup
 
@@ -51,7 +52,7 @@ python ingest.py --force
 ## Run API
 
 ```bash
-python app.py
+.venv\Scripts\python.exe app.py
 ```
 
 The API exposes:
@@ -66,6 +67,18 @@ Example request:
   "message": "What services does the company offer?",
   "session_id": "optional-session-id"
 }
+```
+
+## Run Streamlit Test UI
+
+```bash
+.venv\Scripts\streamlit.exe run frontend/streamlit_app.py
+```
+
+or:
+
+```bash
+.venv\Scripts\streamlit.exe run streamlit_app.py
 ```
 
 ## Notes

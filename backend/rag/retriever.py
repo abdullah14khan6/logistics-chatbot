@@ -28,14 +28,22 @@ class PineconeRetriever:
             namespace=self.settings.pinecone_namespace,
             include_metadata=True,
         )
-        matches = getattr(result, "matches", None) or result.get("matches", [])
+        matches = getattr(result, "matches", None)
+        if matches is None and isinstance(result, dict):
+            matches = result.get("matches", [])
+        matches = matches or []
         chunks: list[RetrievedChunk] = []
         for match in matches:
-            metadata = dict(getattr(match, "metadata", None) or match.get("metadata", {}))
+            metadata = getattr(match, "metadata", None)
+            if metadata is None and isinstance(match, dict):
+                metadata = match.get("metadata", {})
+            metadata = dict(metadata or {})
             text = str(metadata.pop("text", "")).strip()
             if not text:
                 continue
-            score = float(getattr(match, "score", None) or match.get("score", 0.0))
+            score = getattr(match, "score", None)
+            if score is None and isinstance(match, dict):
+                score = match.get("score", 0.0)
             chunks.append(RetrievedChunk(text=text, score=score, metadata=metadata))
         logger.info("Retrieved %s chunks for query", len(chunks))
         return chunks
@@ -74,4 +82,3 @@ def format_context(chunks: list[RetrievedChunk]) -> str:
         )
         formatted.append(f"[{citation}]\n{chunk.text}")
     return "\n\n".join(formatted)
-
