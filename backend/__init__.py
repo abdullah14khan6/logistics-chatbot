@@ -1,0 +1,2 @@
+"""Logistics chatbot backend package."""
+

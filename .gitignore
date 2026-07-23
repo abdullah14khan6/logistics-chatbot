@@ -1,0 +1,15 @@
+.env
+.venv/
+.python312/
+python-*.exe
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+data/.ingestion_manifest.json
+data/*.pdf
+data/*api key*.txt
+data/service head info.txt
+data/tracking link.txt
+!data/.gitkeep
