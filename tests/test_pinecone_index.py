@@ -35,6 +35,7 @@ def test_missing_pinecone_index_is_created(monkeypatch) -> None:
     pipeline.settings = Settings(
         PINECONE_API_KEY="pinecone",
         PINECONE_INDEX_NAME="logistics-company-rag",
+        PINECONE_HOST="",
     )
 
     index = pipeline._pinecone_index()
@@ -43,4 +44,3 @@ def test_missing_pinecone_index_is_created(monkeypatch) -> None:
     assert fake_client.created
     assert fake_client.create_kwargs["dimension"] == 768
     assert fake_client.create_kwargs["metric"] == "cosine"
-

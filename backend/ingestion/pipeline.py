@@ -1,4 +1,5 @@
 import logging
+import re
 from pathlib import Path
 from uuid import uuid5, NAMESPACE_URL
 
@@ -20,6 +21,7 @@ class IngestionPipeline:
         self.extractor = PdfOcrExtractor(
             dpi=settings.ocr_dpi,
             tesseract_cmd=settings.tesseract_cmd,
+            native_text_min_chars=settings.native_text_min_chars,
         )
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=settings.chunk_size,
@@ -28,6 +30,9 @@ class IngestionPipeline:
         )
         self.embeddings = HuggingFaceEmbeddings(
             model_name=settings.embedding_model_name,
+            model_kwargs={
+                "local_files_only": settings.embedding_local_files_only
+            },
             encode_kwargs={"normalize_embeddings": True},
         )
 
@@ -47,29 +52,42 @@ class IngestionPipeline:
                 logger.info("Skipping unchanged PDF: %s", pdf_path)
                 continue
 
-            logger.info("OCR extracting PDF: %s", pdf_path)
+            logger.info("Extracting PDF text with OCR fallback: %s", pdf_path)
             pages = self.extractor.extract(pdf_path)
-            documents = self._chunk_pages(pdf_path, pages)
+            documents = self._chunk_pages(pdf_path, pages, content_hash)
             if not documents:
                 logger.warning("No OCR text found in %s", pdf_path)
                 continue
 
-            vector_count = self._upsert_documents(index, documents)
+            records = self._build_records(documents)
+            self._delete_existing_document(index, pdf_path.name)
+            vector_count = self._upsert_records(index, records)
             manifest.mark_processed(pdf_path, content_hash, vector_count)
             total_vectors += vector_count
             logger.info("Upserted %s vectors for %s", vector_count, pdf_path.name)
 
         return total_vectors
 
-    def _chunk_pages(self, pdf_path: Path, pages: list[PageText]) -> list[Document]:
+    def _chunk_pages(
+        self,
+        pdf_path: Path,
+        pages: list[PageText],
+        content_hash: str,
+    ) -> list[Document]:
         documents: list[Document] = []
         for page in pages:
+            section = self._section_title(page.text)
+            content_type = self._content_type(page.text, section)
             page_document = Document(
                 page_content=page.text,
                 metadata={
                     "page_number": page.page_number,
                     "document_name": pdf_path.name,
-                    "source": str(pdf_path),
+                    "source": pdf_path.name,
+                    "document_hash": content_hash,
+                    "section": section,
+                    "content_type": content_type,
+                    "extraction_method": page.extraction_method,
                 },
             )
             chunks = self.splitter.split_documents([page_document])
@@ -78,7 +96,58 @@ class IngestionPipeline:
                 documents.append(chunk)
         return documents
 
-    def _upsert_documents(self, index, documents: list[Document], batch_size: int = 100) -> int:
+    def _delete_existing_document(self, index, document_name: str) -> None:
+        index.delete(
+            namespace=self.settings.pinecone_namespace,
+            filter={"document_name": {"$eq": document_name}},
+        )
+
+    @staticmethod
+    def _section_title(text: str) -> str:
+        for line in text.splitlines():
+            candidate = line.strip(" -•\t")
+            if candidate and len(candidate) <= 100:
+                return candidate
+        return "Company information"
+
+    @staticmethod
+    def _content_type(text: str, section: str) -> str:
+        normalized = f"{section}\n{text}".lower()
+        email_count = len(re.findall(r"[\w.+-]+@[\w.-]+\.[a-z]{2,}", normalized))
+        if email_count >= 2 or any(
+            marker in normalized
+            for marker in (
+                "team leaders",
+                "head office- management",
+                "branch manager",
+                "head of department",
+            )
+        ):
+            return "staff_directory"
+        if "address" in normalized and any(
+            city in normalized for city in ("sialkot", "karachi")
+        ):
+            return "office"
+        if any(
+            marker in normalized
+            for marker in (
+                "our services",
+                "service portfolio",
+                "air freight",
+                "ocean freight",
+                "warehousing",
+                "customs brokerage",
+            )
+        ):
+            return "service"
+        return "company"
+
+    def _build_records(
+        self,
+        documents: list[Document],
+        batch_size: int = 100,
+    ) -> list[dict]:
+        all_records: list[dict] = []
         for start in range(0, len(documents), batch_size):
             batch = documents[start : start + batch_size]
             texts = [document.page_content for document in batch]
@@ -86,7 +155,12 @@ class IngestionPipeline:
             records = []
             for document, vector in zip(batch, vectors, strict=True):
                 chunk_id = document.metadata["chunk_id"]
-                vector_id = str(uuid5(NAMESPACE_URL, f"{document.metadata['source']}#{chunk_id}"))
+                vector_id = str(
+                    uuid5(
+                        NAMESPACE_URL,
+                        f"{document.metadata['document_name']}#{chunk_id}",
+                    )
+                )
                 metadata = {
                     **document.metadata,
                     "text": document.page_content,
@@ -98,8 +172,21 @@ class IngestionPipeline:
                         "metadata": metadata,
                     }
                 )
-            index.upsert(vectors=records, namespace=self.settings.pinecone_namespace)
-        return len(documents)
+            all_records.extend(records)
+        return all_records
+
+    def _upsert_records(
+        self,
+        index,
+        records: list[dict],
+        batch_size: int = 100,
+    ) -> int:
+        for start in range(0, len(records), batch_size):
+            index.upsert(
+                vectors=records[start : start + batch_size],
+                namespace=self.settings.pinecone_namespace,
+            )
+        return len(records)
 
     def _pinecone_index(self):
         client = Pinecone(api_key=self.settings.pinecone_api_key)

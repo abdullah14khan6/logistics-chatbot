@@ -1,0 +1,177 @@
+{
+  "company_name": "Paramount Logistics International",
+  "office_hours": {
+    "days": "Monday-Saturday",
+    "opens": "09:00",
+    "closes": "18:00",
+    "display": "Monday-Saturday, 9:00 AM-6:00 PM"
+  },
+  "offices": [
+    {
+      "id": "sialkot_head_office",
+      "name": "Sialkot Head Office",
+      "city": "Sialkot",
+      "address": "Opp Main Gate of S.I.E, Ugoki Road, Shahpura, Sialkot, Pakistan",
+      "phones": [
+        "+92-52-3258090",
+        "+92-52-3257060"
+      ],
+      "hours": "Monday-Saturday, 9:00 AM-6:00 PM"
+    },
+    {
+      "id": "karachi_branch_office",
+      "name": "Karachi Branch Office",
+      "city": "Karachi",
+      "address": "Room No. 553, 5th Floor, Sunny Plaza, Hasrat Mohani Road, I.I. Chundrigar Road, Karachi, Pakistan",
+      "phones": [
+        "+92-21-32276668",
+        "+92-21-32211746"
+      ],
+      "hours": "Monday-Saturday, 9:00 AM-6:00 PM"
+    }
+  ],
+  "policies": {
+    "payment_terms": "Payment terms are provided on a case-by-case basis according to company policy and the specific service requested.",
+    "prohibited_items": "Acceptance of prohibited or restricted items is evaluated on a case-by-case basis in accordance with carrier regulations, destination country laws, and company policy.",
+    "shipment_delays": "Customers are informed promptly of any shipment delays along with the reason, expected impact, and updated delivery timeline whenever available."
+  },
+  "capabilities": {
+    "amazon_fba": "Amazon FBA shipping and delivery services are available."
+  },
+  "default_contact_role": "head_of_services",
+  "contacts": [
+    {
+      "id": "head_of_services",
+      "name": "Usama Shahid",
+      "title": "Head of Services",
+      "email": "Hos.skt@paramountlogistic.com",
+      "phone": "+92 312 8640999",
+      "aliases": [
+        "service head",
+        "head of service",
+        "head of services",
+        "head of freight services",
+        "freight services",
+        "pricing team",
+        "pricing",
+        "sales and pricing",
+        "logistics consultation"
+      ]
+    },
+    {
+      "id": "international_imports",
+      "name": "Umer Khan",
+      "title": "International Imports",
+      "email": "umer@paramountlogistic.com",
+      "phone": "",
+      "aliases": [
+        "imports",
+        "import services",
+        "import team",
+        "head of imports",
+        "international imports"
+      ]
+    },
+    {
+      "id": "international_exports",
+      "name": "Zahid Ali",
+      "title": "International Exports",
+      "email": "ops@paramountlogistic.com",
+      "phone": "",
+      "aliases": [
+        "exports",
+        "export services",
+        "export team",
+        "head of exports",
+        "international exports"
+      ]
+    },
+    {
+      "id": "air_freight",
+      "name": "Nadeem Ahmed",
+      "title": "Manager Airfreight",
+      "email": "Air.skt@paramountlogistic.com",
+      "phone": "",
+      "aliases": [
+        "air freight",
+        "airfreight",
+        "air freight manager",
+        "head of air freight",
+        "air freight services"
+      ]
+    },
+    {
+      "id": "warehousing",
+      "name": "Nouman Ahmed",
+      "title": "Warehouse Manager",
+      "email": "ontrack@paramountlogistic.com",
+      "phone": "",
+      "aliases": [
+        "warehouse",
+        "warehousing",
+        "warehouse manager",
+        "head of warehousing",
+        "warehousing services"
+      ]
+    }
+  ],
+  "contact_routing": {
+    "sea_freight": "head_of_services",
+    "customs": "head_of_services",
+    "project_cargo": "head_of_services",
+    "dangerous_goods": "head_of_services",
+    "express_shipping": "head_of_services",
+    "cargo_insurance": "head_of_services",
+    "door_to_door": "head_of_services",
+    "amazon_fba": "head_of_services"
+  },
+  "services_offered": [
+    "Air Freight",
+    "Sea Freight (FCL & LCL)",
+    "Import Services",
+    "Export Services",
+    "Door-to-Door Delivery",
+    "Customs Clearance",
+    "Freight Forwarding",
+    "Supplier Pickup",
+    "Warehouse-to-Warehouse Delivery",
+    "Port-to-Port Shipping",
+    "Port-to-Door Delivery",
+    "Door-to-Port Delivery",
+    "Cargo Consolidation",
+    "Buyer Consolidation",
+    "Warehousing & Storage",
+    "Distribution Services",
+    "Cargo Insurance",
+    "Project Cargo",
+    "Oversized & Heavy Cargo Handling",
+    "Dangerous Goods Handling (subject to regulations)",
+    "Express Shipping",
+    "Temperature-Controlled Shipments (where available)",
+    "Cross-Border Logistics",
+    "E-commerce Logistics",
+    "Amazon FBA Logistics",
+    "Commercial Shipment Handling",
+    "Personal Cargo Shipping"
+  ],
+  "value_added_services": [
+    "Shipping Documentation Assistance",
+    "Commercial Invoice Preparation Guidance",
+    "Packing List Assistance",
+    "Bill of Lading / Air Waybill Support",
+    "Customs Documentation",
+    "Certificate of Origin Assistance",
+    "Cargo Packing (selected customers)",
+    "Cargo Repacking",
+    "Palletization",
+    "Cargo Labeling & Marking",
+    "Shipment Inspection Coordination",
+    "Cargo Tracking & Status Updates",
+    "Delivery Confirmation",
+    "Logistics Consultation",
+    "Shipment Planning",
+    "Freight Cost Optimization",
+    "Import & Export Advisory",
+    "Dedicated Account Management (where applicable)"
+  ]
+}

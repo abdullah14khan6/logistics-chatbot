@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from backend.config.settings import Settings
+from backend.knowledge.company_profile import load_company_profile
 
 
 @dataclass(frozen=True)
@@ -16,8 +17,9 @@ class CheckResult:
 REQUIRED_PACKAGES = (
     "fastapi",
     "streamlit",
-    "langchain",
-    "langgraph",
+    "langchain_core",
+    "langchain_groq",
+    "langchain_huggingface",
     "pinecone",
     "fitz",
     "pytesseract",
@@ -31,6 +33,7 @@ def run_preflight(settings: Settings) -> list[CheckResult]:
         *_check_packages(),
         _check_tesseract(settings),
         _check_env(settings),
+        _check_company_profile(settings),
         _check_data_dir(settings.data_dir),
     ]
 
@@ -93,3 +96,29 @@ def _check_data_dir(data_dir: Path) -> CheckResult:
         return CheckResult(name="data PDFs", ok=False, detail=f"no PDFs found in {data_dir}")
     return CheckResult(name="data PDFs", ok=True, detail=f"{len(pdfs)} PDF(s) found")
 
+
+def _check_company_profile(settings: Settings) -> CheckResult:
+    path = settings.company_profile_path
+    if not path.exists():
+        return CheckResult(
+            name="company profile",
+            ok=False,
+            detail=f"missing file: {path}",
+        )
+    try:
+        profile = load_company_profile(path)
+        profile.resolve_contact(profile.default_contact_role)
+    except Exception as exc:
+        return CheckResult(
+            name="company profile",
+            ok=False,
+            detail=f"invalid profile: {exc}",
+        )
+    return CheckResult(
+        name="company profile",
+        ok=True,
+        detail=(
+            f"{len(profile.services_offered)} services and "
+            f"{len(profile.contacts)} public contacts loaded"
+        ),
+    )

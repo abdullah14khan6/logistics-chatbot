@@ -13,6 +13,15 @@ def test_health_endpoint() -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_readiness_endpoint_reports_lazy_runtime_as_ready() -> None:
+    client = TestClient(app)
+
+    response = client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready"
+
+
 class FakeChatbotService:
     def __init__(self) -> None:
         self.cleared_session_id = None
@@ -59,3 +68,10 @@ def test_clear_chat_endpoint() -> None:
     assert response.json() == {"cleared": True, "session_id": "session-1"}
     assert fake_service.cleared_session_id == "session-1"
 
+
+def test_chat_endpoint_rejects_blank_messages() -> None:
+    client = TestClient(app)
+
+    response = client.post("/chat", json={"message": "   "})
+
+    assert response.status_code == 422

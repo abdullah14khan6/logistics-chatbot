@@ -8,49 +8,75 @@ class FakeAnalyzer:
     def __init__(self, analyses: list[IntentAnalysis]) -> None:
         self.analyses = analyses
         self.calls = 0
+        self.histories: list[str] = []
+        self.states: list[str] = []
+        self.warmed = False
 
-    def analyze(self, message: str, history: str) -> IntentAnalysis:
+    def analyze(self, message: str, history: str, state: str = "{}") -> IntentAnalysis:
         self.calls += 1
+        self.histories.append(history)
+        self.states.append(state)
         return self.analyses.pop(0)
+
+    def warmup(self) -> None:
+        self.warmed = True
 
 
 class FakeRetriever:
     def __init__(self, chunks: list[RetrievedChunk] | None = None) -> None:
         self.calls = 0
         self.chunks = chunks or []
+        self.queries: list[str] = []
+        self.exclusions: list[set[str]] = []
+        self.warmed = False
 
-    def retrieve(self, query: str) -> list[RetrievedChunk]:
+    def retrieve(
+        self,
+        query: str,
+        exclude_content_types: set[str] | None = None,
+    ) -> list[RetrievedChunk]:
         self.calls += 1
-        self.last_query = query
+        self.queries.append(query)
+        self.exclusions.append(exclude_content_types or set())
         return self.chunks
+
+    def warmup(self) -> None:
+        self.warmed = True
 
 
 class FakeGenerator:
     def __init__(self, answer: str = "We provide warehousing support.") -> None:
         self.calls = 0
         self.answer_text = answer
+        self.instructions = ""
+        self.state = ""
+        self.warmed = False
 
     def answer(
         self,
         question: str,
         context: str,
         history: str,
+        conversation_state: str = "{}",
         intent_analysis: str = "",
         controller_instructions: str = "",
     ) -> str:
         self.calls += 1
         self.context = context
         self.instructions = controller_instructions
+        self.state = conversation_state
         return self.answer_text
+
+    def warmup(self) -> None:
+        self.warmed = True
 
 
 def settings() -> Settings:
     return Settings(
         TRACKING_URL="https://track.example.com",
-        HEAD_OF_SERVICES_NAME="Usama Shahid",
-        HEAD_OF_SERVICES_EMAIL="hos@example.com",
-        HEAD_OF_SERVICES_PHONE="+92 300 0000000",
         retrieval_min_score=0.45,
+        prewarm_on_startup=False,
+        memory_backend="memory",
     )
 
 
@@ -58,46 +84,54 @@ def chunk(score: float = 0.9) -> RetrievedChunk:
     return RetrievedChunk(
         text="Paramount Logistics provides warehousing, distribution, and cross-docking.",
         score=score,
-        metadata={"document_name": "company.pdf"},
+        metadata={
+            "document_name": "company.pdf",
+            "content_type": "service",
+            "page_number": 20,
+        },
     )
 
 
 def service(
-    analysis: IntentAnalysis,
+    analyses: IntentAnalysis | list[IntentAnalysis],
     retriever: FakeRetriever | None = None,
     generator: FakeGenerator | None = None,
 ) -> ChatbotService:
+    plans = analyses if isinstance(analyses, list) else [analyses]
     return ChatbotService(
         settings(),
         retriever=retriever or FakeRetriever([chunk()]),
         generator=generator or FakeGenerator(),
-        intent_analyzer=FakeAnalyzer([analysis]),
+        intent_analyzer=FakeAnalyzer(plans),
     )
 
 
-def test_multi_intent_runs_rag_and_handoff() -> None:
+def test_multi_intent_runs_rag_pricing_and_handoff() -> None:
     analysis = IntentAnalysis(
         intents=["warehousing", "pricing"],
+        actions=["company_lookup", "quote", "handoff"],
         company_specific=True,
         needs_rag=True,
-        needs_pricing=True,
-        needs_handoff=True,
+        entities={"service_mode": "warehousing"},
+        missing_fields=["origin", "destination", "cargo_type"],
         confidence=0.95,
     )
 
-    result = service(analysis).chat("Tell me about warehousing and pricing", "s1")
+    result = service(analysis).chat(
+        "Tell me about warehousing and pricing",
+        "s1",
+    )
 
     assert "We provide warehousing support." in result.response
-    assert "Need a customised quotation" in result.response
-    assert "Name:\nUsama Shahid" in result.response
+    assert "accurate quotation" in result.response
+    assert "Usama Shahid" in result.response
 
 
-def test_tracking_and_quote_are_both_handled() -> None:
+def test_tracking_and_quote_are_both_handled_without_retrieval() -> None:
     analysis = IntentAnalysis(
         intents=["tracking", "pricing"],
-        needs_tracking=True,
-        needs_pricing=True,
-        needs_handoff=True,
+        actions=["tracking", "quote", "handoff"],
+        missing_fields=["origin", "destination"],
         confidence=0.98,
     )
     retriever = FakeRetriever()
@@ -108,12 +142,16 @@ def test_tracking_and_quote_are_both_handled() -> None:
     )
 
     assert "https://track.example.com" in result.response
-    assert "Need a customised quotation" in result.response
+    assert "Usama Shahid" in result.response
     assert retriever.calls == 0
 
 
-def test_prompt_injection_is_refused_without_rag() -> None:
-    analysis = IntentAnalysis(intents=["prompt_injection"], prompt_injection=True)
+def test_prompt_injection_is_refused_without_retrieval() -> None:
+    analysis = IntentAnalysis(
+        dialogue_act="security",
+        intents=["prompt_injection"],
+        actions=["refuse"],
+    )
     retriever = FakeRetriever()
 
     result = service(analysis, retriever=retriever).chat(
@@ -121,22 +159,28 @@ def test_prompt_injection_is_refused_without_rag() -> None:
         "s1",
     )
 
-    assert "I can't help with hidden instructions" in result.response
+    assert "can't reveal hidden instructions" in result.response
     assert retriever.calls == 0
 
 
-def test_unrelated_request_is_refused() -> None:
-    analysis = IntentAnalysis(intents=["unrelated"], unrelated=True)
+def test_unrelated_request_is_declined_concisely() -> None:
+    analysis = IntentAnalysis(
+        dialogue_act="unrelated",
+        intents=["unrelated"],
+        unrelated=True,
+    )
 
     result = service(analysis).chat("Write me a Python game", "s1")
 
-    assert "logistics-related questions" in result.response
-    assert "Python" not in result.response
+    assert result.response == (
+        "I can help with Paramount Logistics and logistics-related questions."
+    )
 
 
 def test_low_confidence_retrieval_prevents_company_answer() -> None:
     analysis = IntentAnalysis(
-        intents=["ceo"],
+        intents=["leadership"],
+        actions=["company_lookup"],
         company_specific=True,
         needs_rag=True,
         confidence=0.9,
@@ -144,66 +188,215 @@ def test_low_confidence_retrieval_prevents_company_answer() -> None:
     retriever = FakeRetriever([chunk(score=0.2)])
     generator = FakeGenerator()
 
-    result = service(analysis, retriever=retriever, generator=generator).chat(
-        "Who is the CEO?",
-        "s1",
-    )
+    result = service(
+        analysis,
+        retriever=retriever,
+        generator=generator,
+    ).chat("Who is the CEO?", "s1")
 
-    assert "couldn't find reliable information" in result.response
+    assert "don't have confirmed company information" in result.response
     assert generator.calls == 0
 
 
-def test_contact_card_memory_avoids_repeating_details() -> None:
+def test_explicit_contact_repeat_returns_email_without_earlier_wording() -> None:
     analyses = [
-        IntentAnalysis(intents=["pricing"], needs_pricing=True, needs_handoff=True),
-        IntentAnalysis(intents=["pricing"], needs_pricing=True, needs_handoff=True),
+        IntentAnalysis(
+            intents=["contact", "imports"],
+            actions=["contact"],
+            explicit_contact_request=True,
+            requested_contact_role="imports",
+        ),
+        IntentAnalysis(
+            dialogue_act="follow_up",
+            intents=["contact", "imports", "follow_up"],
+            actions=["contact"],
+            explicit_contact_request=True,
+            repeat_request=True,
+            requested_contact_role="imports",
+            contact_fields=["email"],
+        ),
     ]
-    bot = ChatbotService(
-        settings(),
-        retriever=FakeRetriever(),
-        generator=FakeGenerator(),
-        intent_analyzer=FakeAnalyzer(analyses),
+    bot = service(analyses, retriever=FakeRetriever())
+
+    first = bot.chat("Who handles imports?", "s1")
+    bot.chat("thanks", "s1")
+    bot.chat("hello", "s1")
+    repeated = bot.chat("Can I have his email again?", "s1")
+
+    assert "umer@paramountlogistic.com" in first.response
+    assert "umer@paramountlogistic.com" in repeated.response
+    assert "mentioned earlier" not in repeated.response.lower()
+    assert "shared earlier" not in repeated.response.lower()
+
+
+def test_department_contact_is_returned_only_when_explicitly_requested() -> None:
+    analysis = IntentAnalysis(
+        intents=["contact", "air_freight"],
+        actions=["contact"],
+        explicit_contact_request=True,
+        requested_contact_role="head of air freight",
     )
 
-    first = bot.chat("I need a quote", "s1")
-    second = bot.chat("pricing again", "s1")
+    result = service(analysis, retriever=FakeRetriever()).chat(
+        "Who is the head of air freight?",
+        "s1",
+    )
 
-    assert "Name:\nUsama Shahid" in first.response
-    assert "As mentioned earlier" in second.response
-    assert "Name:\nUsama Shahid" not in second.response
+    assert "Nadeem Ahmed" in result.response
+    assert "Air.skt@paramountlogistic.com" in result.response
 
 
-def test_head_of_services_uses_env_contact_without_rag() -> None:
+def test_unavailable_contact_field_is_reported_without_invention() -> None:
     analysis = IntentAnalysis(
-        intents=["head_of_services"],
-        needs_head_of_services=True,
-        needs_handoff=True,
-        show_contact_details=True,
+        intents=["contact", "imports"],
+        actions=["contact"],
+        explicit_contact_request=True,
+        requested_contact_role="imports",
+        contact_fields=["phone"],
+    )
+
+    result = service(analysis, retriever=FakeRetriever()).chat(
+        "What is the Imports contact phone number?",
+        "s1",
+    )
+
+    assert "Phone:** Not publicly listed" in result.response
+
+
+def test_missing_department_contact_uses_transparent_fallback() -> None:
+    analysis = IntentAnalysis(
+        intents=["contact", "sea_freight"],
+        actions=["contact"],
+        explicit_contact_request=True,
+        requested_contact_role="sea_freight",
+    )
+
+    result = service(analysis, retriever=FakeRetriever()).chat(
+        "Who is the Head of Sea Freight?",
+        "s1",
+    )
+
+    assert "separate sea freight contact is not listed" in result.response
+    assert "Usama Shahid" in result.response
+    assert "Hos.skt@paramountlogistic.com" in result.response
+
+
+def test_profile_answers_office_hours_without_llm_or_retrieval() -> None:
+    analysis = IntentAnalysis(
+        intents=["office_hours"],
+        actions=["company_lookup"],
+        company_specific=True,
     )
     retriever = FakeRetriever()
     generator = FakeGenerator()
 
-    result = service(analysis, retriever=retriever, generator=generator).chat(
-        "service head information",
-        "s1",
-    )
+    result = service(
+        analysis,
+        retriever=retriever,
+        generator=generator,
+    ).chat("What are your office hours?", "s1")
 
-    assert "Name:\nUsama Shahid" in result.response
-    assert "Email:\nhos@example.com" in result.response
+    assert "Monday-Saturday, 9:00 AM-6:00 PM" in result.response
     assert retriever.calls == 0
     assert generator.calls == 0
 
 
-def test_gratitude_response_is_natural() -> None:
-    analysis = IntentAnalysis(intents=["gratitude"], gratitude=True)
+def test_profile_answers_amazon_fba_without_llm_or_retrieval() -> None:
+    analysis = IntentAnalysis(
+        intents=["amazon_fba"],
+        actions=["company_lookup"],
+        company_specific=True,
+    )
+    retriever = FakeRetriever()
+    generator = FakeGenerator()
 
-    result = service(analysis).chat("thanks", "s1")
+    result = service(
+        analysis,
+        retriever=retriever,
+        generator=generator,
+    ).chat("Do you offer Amazon FBA shipping?", "s1")
 
-    assert "welcome" in result.response.lower() or "happy to help" in result.response.lower()
+    assert result.response == "Amazon FBA shipping and delivery services are available."
+    assert retriever.calls == 0
+    assert generator.calls == 0
 
 
-def test_greeting_is_warm_and_skips_analyzer() -> None:
-    analyzer = FakeAnalyzer([])
+def test_broad_company_plan_still_receives_structured_profile_facts() -> None:
+    analysis = IntentAnalysis(
+        intents=["company_information"],
+        actions=["general_answer"],
+        company_specific=True,
+    )
+    generator = FakeGenerator("Our office hours are Monday-Saturday.")
+
+    result = service(
+        analysis,
+        retriever=FakeRetriever(),
+        generator=generator,
+    ).chat("What are your office hours?", "s1")
+
+    assert "Office hours: Monday-Saturday, 9:00 AM-6:00 PM" in generator.context
+    assert "Monday-Saturday" in result.response
+
+
+def test_follow_up_uses_planner_resolved_query_and_structured_state() -> None:
+    analyses = [
+        IntentAnalysis(
+            intents=["sea_freight"],
+            actions=["company_lookup"],
+            company_specific=True,
+            needs_rag=True,
+            entities={
+                "destination": "Australia",
+                "service_mode": "sea freight",
+            },
+            resolved_query="Paramount sea freight service to Australia",
+        ),
+        IntentAnalysis(
+            dialogue_act="follow_up",
+            intents=["sea_freight", "pricing", "follow_up"],
+            actions=["company_lookup", "quote"],
+            company_specific=True,
+            needs_rag=True,
+            entities={
+                "destination": "Australia",
+                "service_mode": "sea freight",
+            },
+            resolved_query="price of sea freight service to Australia",
+            missing_fields=["origin", "cargo_type", "weight"],
+        ),
+    ]
+    retriever = FakeRetriever([chunk()])
+    bot = service(analyses, retriever=retriever)
+
+    bot.chat("I want sea freight to Australia.", "s1")
+    bot.chat("How much would that cost?", "s1")
+
+    assert retriever.queries == [
+        "Paramount sea freight service to Australia",
+        "price of sea freight service to Australia",
+    ]
+
+
+def test_acknowledgement_with_pending_question_goes_through_planner() -> None:
+    analyses = [
+        IntentAnalysis(
+            intents=["pricing"],
+            actions=["quote"],
+            missing_fields=["origin", "destination"],
+            resolved_query="shipping quotation",
+        ),
+        IntentAnalysis(
+            dialogue_act="follow_up",
+            intents=["follow_up"],
+            actions=["clarify"],
+            follow_up=True,
+            clarification_question="Please share the pickup location and destination.",
+            missing_fields=["origin", "destination"],
+            resolved_query="shipping quotation",
+        ),
+    ]
+    analyzer = FakeAnalyzer(analyses)
     bot = ChatbotService(
         settings(),
         retriever=FakeRetriever(),
@@ -211,84 +404,119 @@ def test_greeting_is_warm_and_skips_analyzer() -> None:
         intent_analyzer=analyzer,
     )
 
-    result = bot.chat("hi", "s1")
+    bot.chat("I need a quote", "s1")
+    result = bot.chat("yes", "s1")
 
-    assert result.intent == "greeting"
-    assert "Welcome" in result.response or "Hi" in result.response or "Hello" in result.response
-    assert "Tell me what you're shipping" not in result.response
-    assert analyzer.calls == 0
-
-
-def test_small_talk_is_natural() -> None:
-    result = service(IntentAnalysis()).chat("how are you", "s1")
-
-    assert "thank" in result.response.lower() or "doing" in result.response.lower()
+    assert analyzer.calls == 2
+    assert '"pending_question"' in analyzer.states[1]
+    assert "pickup location and destination" in result.response
 
 
-def test_farewell_is_natural() -> None:
-    result = service(IntentAnalysis()).chat("bye", "s1")
-
-    assert "day" in result.response.lower() or "take care" in result.response.lower()
-
-
-def test_acknowledgement_without_pending_question_is_natural() -> None:
-    result = service(IntentAnalysis()).chat("yes", "s1")
-
-    assert "How can I help" in result.response or "What would you like" in result.response
-
-
-def test_response_sanitizer_removes_rag_language() -> None:
-    analysis = IntentAnalysis(
-        intents=["company_services"],
-        company_specific=True,
-        needs_rag=True,
+def test_pure_greetings_skip_planner_but_are_compacted_from_history() -> None:
+    analyzer = FakeAnalyzer(
+        [
+            IntentAnalysis(
+                intents=["warehousing"],
+                actions=["company_lookup"],
+                company_specific=True,
+                needs_rag=True,
+            )
+        ]
     )
-    generator = FakeGenerator(
-        "According to the retrieved company context, Paramount Logistics offers warehousing."
-    )
-
-    result = service(analysis, generator=generator).chat("services?", "s1")
-
-    assert "retrieved" not in result.response.lower()
-    assert "According to" not in result.response
-
-
-def test_response_sanitizer_removes_unauthorized_staff_emails() -> None:
-    analysis = IntentAnalysis(
-        intents=["warehousing"],
-        company_specific=True,
-        needs_rag=True,
-    )
-    generator = FakeGenerator(
-        "You can contact the warehouse team at warehouse@example.com or "
-        "the Head of Services at hos@example.com."
-    )
-
-    result = service(analysis, generator=generator).chat("warehousing contact?", "s1")
-
-    assert "warehouse@example.com" not in result.response
-    assert "hos@example.com" in result.response
-
-
-def test_soft_handoff_is_not_repeated_every_turn() -> None:
-    analyses = [
-        IntentAnalysis(intents=["warehousing"], company_specific=True, needs_rag=True),
-        IntentAnalysis(intents=["customs"], company_specific=True, needs_rag=True),
-        IntentAnalysis(intents=["transportation"], company_specific=True, needs_rag=True),
-        IntentAnalysis(intents=["air_freight"], company_specific=True, needs_rag=True),
-        IntentAnalysis(intents=["ocean_freight"], company_specific=True, needs_rag=True),
-    ]
     bot = ChatbotService(
         settings(),
         retriever=FakeRetriever([chunk()]),
         generator=FakeGenerator(),
-        intent_analyzer=FakeAnalyzer(analyses),
+        intent_analyzer=analyzer,
     )
 
-    for index in range(4):
-        early = bot.chat(f"question {index}", "s1")
+    bot.chat("hi", "s1")
+    bot.chat("hello", "s1")
+    bot.chat("Tell me about warehousing", "s1")
 
-    suggested = bot.chat("another question", "s1")
+    assert analyzer.calls == 1
+    assert "social-only message(s) omitted" in analyzer.histories[0]
+    assert "user: hi" not in analyzer.histories[0]
 
-    assert "Head of Services" not in early.response
-    assert "Head of Services" in suggested.response
+
+def test_greeting_mid_conversation_preserves_context() -> None:
+    analysis = IntentAnalysis(
+        intents=["warehousing"],
+        actions=["company_lookup"],
+        company_specific=True,
+        needs_rag=True,
+    )
+    bot = service(analysis)
+
+    bot.chat("Tell me about warehousing", "s1")
+    greeting = bot.chat("hi", "s1")
+
+    assert "again" in greeting.response.lower()
+
+
+def test_generated_email_is_removed_without_explicit_contact_action() -> None:
+    analysis = IntentAnalysis(
+        intents=["warehousing"],
+        actions=["company_lookup"],
+        company_specific=True,
+        needs_rag=True,
+    )
+    generator = FakeGenerator(
+        "Warehousing is available. Email warehouse@example.com for details."
+    )
+
+    result = service(analysis, generator=generator).chat("warehousing?", "s1")
+
+    assert "warehouse@example.com" not in result.response
+
+
+def test_generator_receives_concise_response_contract() -> None:
+    analysis = IntentAnalysis(
+        intents=["warehousing"],
+        actions=["company_lookup"],
+        company_specific=True,
+        needs_rag=True,
+    )
+    generator = FakeGenerator()
+
+    service(analysis, generator=generator).chat("warehousing?", "s1")
+
+    assert "under 100 words" in generator.instructions
+    assert "Ask no follow-up question" in generator.instructions
+
+
+def test_generated_answer_is_capped_to_configured_word_limit() -> None:
+    analysis = IntentAnalysis(
+        intents=["warehousing"],
+        actions=["company_lookup"],
+        company_specific=True,
+        needs_rag=True,
+    )
+    generator = FakeGenerator(" ".join(f"word{index}" for index in range(150)))
+
+    result = service(analysis, generator=generator).chat("warehousing?", "s1")
+
+    assert len(result.response.split()) <= 100
+
+
+def test_retrieval_excludes_staff_directory() -> None:
+    analysis = IntentAnalysis(
+        intents=["warehousing"],
+        actions=["company_lookup"],
+        company_specific=True,
+        needs_rag=True,
+    )
+    retriever = FakeRetriever([chunk()])
+
+    service(analysis, retriever=retriever).chat("warehousing?", "s1")
+
+    assert retriever.exclusions == [{"staff_directory"}]
+
+
+def test_service_warmup_delegates_to_retriever() -> None:
+    retriever = FakeRetriever()
+    bot = service(IntentAnalysis(), retriever=retriever)
+
+    bot.warmup()
+
+    assert retriever.warmed

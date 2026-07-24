@@ -5,7 +5,10 @@ from pathlib import Path
 from typing import Any
 
 
-def _load_env_file(path: Path = Path(".env")) -> None:
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _load_env_file(path: Path = PROJECT_ROOT / ".env") -> None:
     if not path.exists():
         return
     for line in path.read_text(encoding="utf-8-sig").splitlines():
@@ -30,11 +33,23 @@ def _env_float(name: str, default: float) -> float:
     return float(value) if value else default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _env_list(name: str, default: list[str] | None = None) -> list[str]:
     value = os.environ.get(name)
     if not value:
         return default or []
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _env_path(name: str, default: str) -> Path:
+    path = Path(_env(name, default))
+    return path if path.is_absolute() else PROJECT_ROOT / path
 
 
 @dataclass(frozen=True, init=False)
@@ -47,22 +62,38 @@ class Settings:
     head_of_services_name: str
     head_of_services_email: str
     head_of_services_phone: str
+    company_profile_path: Path
     data_dir: Path
     ingestion_manifest_path: Path
     embedding_model_name: str
     embedding_dimension: int
+    embedding_local_files_only: bool
     pinecone_namespace: str
     pinecone_cloud: str
     pinecone_region: str
     retrieval_top_k: int
+    retrieval_candidate_k: int
     retrieval_min_score: float
+    retrieval_cache_size: int
     intent_model_name: str
     groq_model_name: str
     groq_temperature: float
+    llm_timeout_seconds: float
+    llm_max_retries: int
+    response_max_tokens: int
+    response_max_words: int
+    memory_backend: str
+    memory_db_path: Path
+    memory_max_turns: int
+    memory_ttl_seconds: int
+    memory_max_sessions: int
+    prewarm_on_startup: bool
+    uvicorn_reload: bool
     cors_origins: list[str]
     chunk_size: int
     chunk_overlap: int
     ocr_dpi: int
+    native_text_min_chars: int
     tesseract_cmd: str
 
     def __init__(self, **overrides: Any) -> None:
@@ -76,24 +107,46 @@ class Settings:
             "head_of_services_name": _env("HEAD_OF_SERVICES_NAME"),
             "head_of_services_email": _env("HEAD_OF_SERVICES_EMAIL"),
             "head_of_services_phone": _env("HEAD_OF_SERVICES_PHONE"),
-            "data_dir": Path(_env("DATA_DIR", "data")),
-            "ingestion_manifest_path": Path(
-                _env("INGESTION_MANIFEST_PATH", "data/.ingestion_manifest.json")
+            "company_profile_path": _env_path(
+                "COMPANY_PROFILE_PATH", "data/company_profile.json"
+            ),
+            "data_dir": _env_path("DATA_DIR", "data"),
+            "ingestion_manifest_path": _env_path(
+                "INGESTION_MANIFEST_PATH", "data/.ingestion_manifest.json"
             ),
             "embedding_model_name": _env("EMBEDDING_MODEL_NAME", "BAAI/bge-base-en-v1.5"),
             "embedding_dimension": _env_int("EMBEDDING_DIMENSION", 768),
+            "embedding_local_files_only": _env_bool(
+                "EMBEDDING_LOCAL_FILES_ONLY", False
+            ),
             "pinecone_namespace": _env("PINECONE_NAMESPACE", "company-docs"),
             "pinecone_cloud": _env("PINECONE_CLOUD", "aws"),
             "pinecone_region": _env("PINECONE_REGION", "us-east-1"),
             "retrieval_top_k": _env_int("RETRIEVAL_TOP_K", 4),
+            "retrieval_candidate_k": _env_int("RETRIEVAL_CANDIDATE_K", 8),
             "retrieval_min_score": _env_float("RETRIEVAL_MIN_SCORE", 0.45),
+            "retrieval_cache_size": _env_int("RETRIEVAL_CACHE_SIZE", 128),
             "intent_model_name": _env("INTENT_MODEL_NAME", "llama-3.1-8b-instant"),
             "groq_model_name": _env("GROQ_MODEL_NAME", "llama-3.3-70b-versatile"),
             "groq_temperature": _env_float("GROQ_TEMPERATURE", 0.2),
+            "llm_timeout_seconds": _env_float("LLM_TIMEOUT_SECONDS", 20.0),
+            "llm_max_retries": _env_int("LLM_MAX_RETRIES", 1),
+            "response_max_tokens": _env_int("RESPONSE_MAX_TOKENS", 220),
+            "response_max_words": _env_int("RESPONSE_MAX_WORDS", 100),
+            "memory_backend": _env("MEMORY_BACKEND", "memory").strip().lower(),
+            "memory_db_path": _env_path(
+                "MEMORY_DB_PATH", "data/conversations.db"
+            ),
+            "memory_max_turns": _env_int("MEMORY_MAX_TURNS", 16),
+            "memory_ttl_seconds": _env_int("MEMORY_TTL_SECONDS", 3600),
+            "memory_max_sessions": _env_int("MEMORY_MAX_SESSIONS", 10000),
+            "prewarm_on_startup": _env_bool("PREWARM_ON_STARTUP", False),
+            "uvicorn_reload": _env_bool("UVICORN_RELOAD", False),
             "cors_origins": _env_list("CORS_ORIGINS", ["http://localhost:8501"]),
             "chunk_size": _env_int("CHUNK_SIZE", 900),
             "chunk_overlap": _env_int("CHUNK_OVERLAP", 150),
             "ocr_dpi": _env_int("OCR_DPI", 300),
+            "native_text_min_chars": _env_int("NATIVE_TEXT_MIN_CHARS", 80),
             "tesseract_cmd": _env("TESSERACT_CMD"),
         }
         alias_map = {

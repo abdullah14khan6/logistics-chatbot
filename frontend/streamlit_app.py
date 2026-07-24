@@ -24,7 +24,15 @@ def chat_executor() -> ThreadPoolExecutor:
     return ThreadPoolExecutor(max_workers=2)
 
 
+@st.cache_resource
+def warmup_future():
+    return chat_executor().submit(chatbot_service().warmup)
+
+
 def reset_chat() -> None:
+    previous_session_id = st.session_state.get("session_id")
+    if previous_session_id:
+        chatbot_service().clear_memory(previous_session_id)
     session_id = str(uuid4())
     st.session_state.session_id = session_id
     st.session_state.messages = []
@@ -199,9 +207,10 @@ def handle_prompt(prompt: str) -> None:
                 result = future.result(timeout=CHAT_TIMEOUT_SECONDS)
                 response = result.response
             except TimeoutError:
+                future.cancel()
                 response = (
                     "The request is taking longer than expected. Please try again with a "
-                    "more specific question, or restart the app if the connection is stuck."
+                    "more specific question while the assistant finishes preparing."
                 )
         st.markdown(response)
 
@@ -217,6 +226,8 @@ def main() -> None:
     bootstrap_state()
     render_styles()
     render_sidebar()
+    if get_settings().prewarm_on_startup:
+        warmup_future()
 
     st.markdown('<div class="chat-title">Paramount Logistics Assistant</div>', unsafe_allow_html=True)
     st.markdown(

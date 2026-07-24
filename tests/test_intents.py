@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from backend.chatbot.intents import IntentAnalysis, _json_from_text
 
 
@@ -35,3 +38,39 @@ def test_head_of_services_flag_parses() -> None:
 
     assert analysis.needs_head_of_services
     assert analysis.primary_label() == "head_of_services"
+
+
+def test_action_flags_are_normalized_deterministically() -> None:
+    analysis = IntentAnalysis.from_dict(
+        {
+            "intents": ["pricing"],
+            "actions": ["quote", "handoff"],
+            "confidence": 0.9,
+        }
+    )
+
+    assert analysis.needs_pricing
+    assert analysis.needs_handoff
+
+    company_plan = IntentAnalysis.from_dict(
+        {
+            "intents": ["warehousing"],
+            "actions": ["company_lookup"],
+        }
+    )
+    assert company_plan.company_specific
+
+
+def test_string_boolean_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        IntentAnalysis.from_dict(
+            {
+                "intents": ["tracking"],
+                "needs_tracking": "false",
+            }
+        )
+
+
+def test_unknown_intent_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        IntentAnalysis.from_dict({"intents": ["made_up_route"]})

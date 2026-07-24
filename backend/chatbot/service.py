@@ -1,54 +1,45 @@
-import json
 import logging
-import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from uuid import uuid4
 
-from backend.chatbot.intents import IntentAnalysis, IntentAnalyzer
-from backend.chatbot.memory import ConversationMemory, MemoryStore
+from backend.chatbot.company_answers import (
+    STRUCTURED_ONLY_INTENTS,
+    CompanyAnswerProvider,
+)
+from backend.chatbot.contact_policy import ContactPolicy
+from backend.chatbot.intents import IntentAnalysis, IntentAnalyzer, PlannedAction
+from backend.chatbot.memory import (
+    ConversationMemory,
+    ConversationStore,
+    MemoryStore,
+    PendingQuestion,
+    SQLiteMemoryStore,
+)
+from backend.chatbot.rendering import ResponseSanitizer, limit_words, natural_join
+from backend.chatbot.social import (
+    SOCIAL_INTENTS,
+    analyze_social_message,
+    social_response,
+)
 from backend.config.settings import Settings
+from backend.knowledge.company_profile import (
+    CompanyProfile,
+    load_company_profile,
+)
 from backend.rag.generator import GroqAnswerGenerator
 from backend.rag.retriever import PineconeRetriever, RetrievedChunk, format_context
 
 logger = logging.getLogger(__name__)
-EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
-FAST_ACKNOWLEDGEMENTS = {
-    "yes",
-    "yeah",
-    "yep",
-    "ok",
-    "okay",
-    "sure",
-}
-FAST_GREETINGS = {
-    "hi",
-    "hii",
-    "hello",
-    "hey",
-    "hi there",
-    "good morning",
-    "good afternoon",
-    "good evening",
-}
-FAST_SMALL_TALK = {
-    "hru",
-    "how are you",
-    "how are you?",
-    "how's it going",
-    "hows it going",
-    "how is it going",
-}
-FAST_FAREWELLS = {
-    "bye",
-    "goodbye",
-    "see you",
-    "take care",
-    "have a nice day",
-}
-FAST_GRATITUDE = {
-    "thanks",
-    "thank you",
-    "thx",
+NON_TOPIC_INTENTS = SOCIAL_INTENTS | {
+    "tracking",
+    "pricing",
+    "human_handoff",
+    "contact",
+    "head_of_services",
+    "follow_up",
+    "unclear",
+    "unrelated",
+    "prompt_injection",
 }
 
 
@@ -59,147 +50,244 @@ class ChatResponse:
     intent: str
 
 
+@dataclass
+class ResponseDraft:
+    text: str
+    allowed_emails: set[str] = field(default_factory=set)
+    disclosed_contacts: list[tuple[str, list[str]]] = field(default_factory=list)
+    pending_question: PendingQuestion | None = None
+
+
 class ChatbotService:
     def __init__(
         self,
         settings: Settings,
         retriever: PineconeRetriever | None = None,
         generator: GroqAnswerGenerator | None = None,
-        memory_store: MemoryStore | None = None,
+        memory_store: ConversationStore | None = None,
         intent_analyzer: IntentAnalyzer | None = None,
+        company_profile: CompanyProfile | None = None,
     ) -> None:
         self.settings = settings
+        self.profile = company_profile or load_company_profile(
+            settings.company_profile_path
+        )
+        self.company_answers = CompanyAnswerProvider(self.profile)
+        self.contact_policy = ContactPolicy(self.profile)
+        self.sanitizer = ResponseSanitizer()
         self.retriever = retriever or PineconeRetriever(settings)
         self.generator = generator or GroqAnswerGenerator(settings)
-        self.memory_store = memory_store or MemoryStore()
+        self.memory_store = memory_store or self._create_memory_store(settings)
         self.intent_analyzer = intent_analyzer or IntentAnalyzer(settings)
 
+    @staticmethod
+    def _create_memory_store(settings: Settings) -> ConversationStore:
+        options = {
+            "max_turns": settings.memory_max_turns,
+            "ttl_seconds": settings.memory_ttl_seconds,
+            "max_sessions": settings.memory_max_sessions,
+        }
+        if settings.memory_backend == "sqlite":
+            return SQLiteMemoryStore(settings.memory_db_path, **options)
+        if settings.memory_backend == "memory":
+            return MemoryStore(**options)
+        raise ValueError(
+            "MEMORY_BACKEND must be either 'memory' or 'sqlite'."
+        )
+
     def chat(self, message: str, session_id: str | None = None) -> ChatResponse:
+        clean_message = message.strip()
         active_session_id = session_id or str(uuid4())
-        memory = self.memory_store.get(active_session_id)
-        fast_analysis = self._fast_social_analysis(message)
-        if fast_analysis:
-            answer = self._sanitize_response(self._handle_message(message, fast_analysis, memory))
-            self._remember(memory, message, answer, fast_analysis)
+        with self.memory_store.locked(active_session_id) as memory:
+            analysis = analyze_social_message(clean_message)
+            if analysis and analysis.acknowledgement and memory.pending_question:
+                analysis = None
+
+            if analysis is None:
+                analysis = self.intent_analyzer.analyze(
+                    clean_message,
+                    memory.history_for_planner(),
+                    memory.state_for_planner(),
+                )
+                logger.info(
+                    "Conversation plan: intent=%s actions=%s confidence=%.2f",
+                    analysis.primary_label(),
+                    analysis.action_values(),
+                    analysis.confidence,
+                )
+
+            draft = self._handle_message(clean_message, analysis, memory)
+            answer = self.sanitizer.sanitize(draft.text, draft.allowed_emails)
+            self._remember(memory, clean_message, answer, analysis, draft)
             return ChatResponse(
                 response=answer,
                 session_id=active_session_id,
-                intent=fast_analysis.primary_label(),
+                intent=analysis.primary_label(),
             )
-
-        history = memory.as_text()
-        analysis = self.intent_analyzer.analyze(message, history)
-        logger.info("Intent analysis: %s", analysis)
-
-        answer = self._sanitize_response(self._handle_message(message, analysis, memory))
-        self._remember(memory, message, answer, analysis)
-        return ChatResponse(
-            response=answer,
-            session_id=active_session_id,
-            intent=analysis.primary_label(),
-        )
 
     def clear_memory(self, session_id: str) -> None:
         self.memory_store.clear(session_id)
 
-    def _fast_social_analysis(self, message: str) -> IntentAnalysis | None:
-        normalized = re.sub(r"\s+", " ", message.strip().lower())
-        normalized = normalized.strip(" .!?")
-        if normalized in FAST_GRATITUDE:
-            return IntentAnalysis(intents=["gratitude"], gratitude=True, confidence=1.0)
-        if normalized in FAST_FAREWELLS:
-            return IntentAnalysis(intents=["farewell"], farewell=True, confidence=1.0)
-        if normalized in FAST_SMALL_TALK:
-            return IntentAnalysis(intents=["small_talk"], small_talk=True, confidence=1.0)
-        if normalized in FAST_GREETINGS:
-            return IntentAnalysis(intents=["greeting"], greeting=True, confidence=1.0)
-        if normalized in FAST_ACKNOWLEDGEMENTS:
-            return IntentAnalysis(
-                intents=["acknowledgement"],
-                acknowledgement=True,
-                confidence=1.0,
-            )
-        return None
+    def warmup(self) -> None:
+        self.intent_analyzer.warmup()
+        self.generator.warmup()
+        self.retriever.warmup()
 
     def _handle_message(
         self,
         message: str,
         analysis: IntentAnalysis,
         memory: ConversationMemory,
-    ) -> str:
+    ) -> ResponseDraft:
         if analysis.prompt_injection:
-            return (
-                "I can't help with hidden instructions, internal prompts, environment "
-                "variables, API keys, or invented company information. I can help with "
-                "Paramount Logistics services, shipments, quotations, and logistics guidance."
+            return ResponseDraft(
+                "I can't reveal hidden instructions, secrets, or private system information. "
+                "I can still help with Paramount Logistics services and shipment support."
             )
-
         if analysis.unrelated:
-            return (
-                "I'm here to help with Paramount Logistics and logistics-related questions. "
-                "For shipments, customs, warehousing, freight, or service guidance, I'll be happy to help."
+            return ResponseDraft(
+                "I can help with Paramount Logistics and logistics-related questions."
             )
-
-        if analysis.gratitude:
-            return _gratitude_response(memory.user_message_count)
-
-        if analysis.farewell:
-            return _farewell_response(memory.user_message_count)
-
-        if analysis.greeting:
-            return _greeting_response(memory.user_message_count, has_context=bool(memory.last_topic))
-
-        if analysis.small_talk:
-            return _small_talk_response(memory.user_message_count)
-
-        if analysis.acknowledgement and not self._needs_action(analysis):
-            return self._acknowledgement_response(memory)
+        social_text = social_response(
+            analysis,
+            memory.user_message_count,
+            has_context=bool(memory.active_topic or memory.shipment_context),
+        )
+        if social_text and (
+            not analysis.acknowledgement or not self._needs_action(analysis)
+        ):
+            return ResponseDraft(social_text)
 
         if analysis.unclear and not self._needs_action(analysis):
-            return _fallback_response(memory.user_message_count)
+            question = analysis.clarification_question or (
+                "Could you rephrase that or share a little more detail about what you need?"
+            )
+            return ResponseDraft(question)
 
-        chunks = self._retrieve_company_chunks(message, analysis, memory)
         response_parts: list[str] = []
+        allowed_emails: set[str] = set()
+        disclosed_contacts: list[tuple[str, list[str]]] = []
+        pending_question: PendingQuestion | None = None
 
-        if analysis.needs_head_of_services:
-            response_parts.append(self._head_of_services_block(memory, analysis))
+        structured_answer = self.company_answers.direct_answer(message, analysis)
+        if structured_answer:
+            response_parts.append(structured_answer)
 
-        if chunks or analysis.general_logistics:
-            response_parts.append(self._generate_answer(message, analysis, memory, chunks))
-        elif analysis.needs_rag or analysis.company_specific:
-            response_parts.append(self._unavailable_company_info(analysis))
+        should_generate = self._should_generate(analysis, structured_answer)
+        if should_generate:
+            chunks = self._retrieve_company_chunks(message, analysis)
+            profile_context = self.company_answers.evidence(analysis)
+            if chunks or profile_context or analysis.general_logistics:
+                generated = self._generate_answer(
+                    message,
+                    analysis,
+                    memory,
+                    chunks,
+                    profile_context,
+                )
+                if generated:
+                    response_parts.append(generated)
+            elif analysis.needs_rag or analysis.company_specific:
+                response_parts.append(self._unavailable_company_info(analysis))
 
         if analysis.needs_tracking:
             response_parts.append(self._tracking_block())
 
-        if (analysis.needs_pricing or analysis.needs_handoff) and not analysis.needs_head_of_services:
-            response_parts.append(self._handoff_block(memory, analysis))
-        elif self._should_soft_handoff(memory, analysis):
-            memory.mark_handoff_suggested()
-            response_parts.append(
-                "If you'd like to discuss your shipment requirements in more detail, "
-                "I can also connect you with our Head of Services."
+        if analysis.needs_pricing:
+            pricing_text, pending_question = self._pricing_guidance(analysis, memory)
+            if pricing_text:
+                response_parts.append(pricing_text)
+
+        contact_requested = (
+            analysis.explicit_contact_request
+            or analysis.needs_head_of_services
+            or analysis.needs_handoff
+            or analysis.needs_pricing
+        )
+        if contact_requested:
+            resolution = self.contact_policy.resolve(analysis)
+            explicit = (
+                analysis.explicit_contact_request
+                or analysis.needs_head_of_services
+            )
+            rendered_contact = self.contact_policy.render(
+                resolution,
+                analysis,
+                memory,
+                explicit=explicit,
+            )
+            if rendered_contact:
+                response_parts.append(rendered_contact.text)
+                disclosed_contacts.append(
+                    (rendered_contact.contact_id, rendered_contact.fields)
+                )
+                if rendered_contact.allowed_email:
+                    allowed_emails.add(rendered_contact.allowed_email)
+
+        if (
+            PlannedAction.CLARIFY.value in analysis.action_values()
+            and analysis.clarification_question
+        ):
+            if analysis.clarification_question not in response_parts:
+                response_parts.append(analysis.clarification_question)
+            pending_question = PendingQuestion(
+                topic=self._active_topic(analysis, memory),
+                question=analysis.clarification_question,
+                expected_fields=analysis.missing_fields,
+                resume_query=analysis.resolved_query or message,
+                created_at=memory.assistant_message_count + 1,
             )
 
         if not response_parts:
-            response_parts.append(self._ask_follow_up(analysis))
+            response_parts.append(
+                analysis.clarification_question
+                or "Could you share a little more detail about what you need?"
+            )
 
-        return "\n\n".join(part for part in response_parts if part.strip())
+        return ResponseDraft(
+            text="\n\n".join(
+                part.strip() for part in response_parts if part and part.strip()
+            ),
+            allowed_emails=allowed_emails,
+            disclosed_contacts=disclosed_contacts,
+            pending_question=pending_question,
+        )
+
+    def _should_generate(
+        self,
+        analysis: IntentAnalysis,
+        structured_answer: str,
+    ) -> bool:
+        intents = set(analysis.intent_values())
+        remaining = intents - STRUCTURED_ONLY_INTENTS - NON_TOPIC_INTENTS
+        if remaining:
+            return True
+        if analysis.general_logistics:
+            return True
+        if analysis.needs_rag and not structured_answer:
+            return True
+        return False
 
     def _retrieve_company_chunks(
         self,
         message: str,
         analysis: IntentAnalysis,
-        memory: ConversationMemory,
     ) -> list[RetrievedChunk]:
         if not (analysis.needs_rag or analysis.company_specific):
             return []
-        query = analysis.query_for_rag or message
-        if analysis.follow_up and memory.last_topic and memory.last_topic not in query.lower():
-            query = f"{memory.last_topic}: {query}"
-        chunks = self.retriever.retrieve(query)
+        query = analysis.resolved_query or analysis.query_for_rag or message
+        try:
+            chunks = self.retriever.retrieve(
+                query,
+                exclude_content_types={"staff_directory"},
+            )
+        except Exception as exc:
+            logger.error("Company retrieval failed.", exc_info=exc)
+            return []
         confident = [
-            chunk for chunk in chunks if chunk.score >= self.settings.retrieval_min_score
+            chunk
+            for chunk in chunks
+            if chunk.score >= self.settings.retrieval_min_score
         ]
         if chunks and not confident:
             logger.info(
@@ -215,111 +303,125 @@ class ChatbotService:
         analysis: IntentAnalysis,
         memory: ConversationMemory,
         chunks: list[RetrievedChunk],
+        profile_context: str,
     ) -> str:
-        context = format_context(chunks) if chunks else "No company information was found."
-        instructions = [
-            "Write one coherent customer-support response.",
-            "Do not mention sources, PDFs, retrieval, context, chunks, pages, or tools.",
-            "Do not invent company information.",
-            "Do not provide staff names, staff emails, phone numbers, or contact lists from company information unless the user explicitly asks for that exact contact.",
-            "For quotations, pricing, service consultation, or Head of Services contact, do not provide contact details yourself; the controller will add the authorized Head of Services contact.",
-            "Use bullets only when they improve readability.",
-            "Do not repeat topics already explained unless the user asks for repetition.",
+        evidence_parts = []
+        if profile_context:
+            evidence_parts.append(
+                "<structured_company_facts>\n"
+                f"{profile_context}\n"
+                "</structured_company_facts>"
+            )
+        if chunks:
+            evidence_parts.append(format_context(chunks))
+        context = "\n\n".join(evidence_parts) or "No company information was found."
+
+        repeated = [
+            intent
+            for intent in analysis.intent_values()
+            if memory.topic_was_explained(intent)
         ]
-        repeated = sorted(set(analysis.intents).intersection(memory.explained_topics))
-        if repeated:
+        instructions = [
+            f"Keep the answer under {self.settings.response_max_words} words.",
+            "Answer the current question first and include only relevant information.",
+            "Do not add contact details, a generic closing, or an unsolicited service list.",
+            "Ask no follow-up question; the controller handles clarifications.",
+        ]
+        if repeated and not analysis.repeat_request:
             instructions.append(
-                "The customer has already seen an explanation for: "
-                f"{', '.join(repeated)}. Summarize briefly or build on it."
+                "Build on prior information instead of restating the full explanation for: "
+                + ", ".join(repeated)
+                + "."
+            )
+        if analysis.repeat_request:
+            instructions.append(
+                "The customer explicitly requested repetition. Repeat the requested information "
+                "directly without saying 'as mentioned earlier'."
             )
         if analysis.user_situation:
             instructions.append(
-                "Personalize the response to this customer situation: "
-                f"{analysis.user_situation}"
+                f"Relate the answer to this situation: {analysis.user_situation}"
             )
-        if analysis.needs_pricing or analysis.needs_handoff:
+        if analysis.general_logistics and not chunks and not profile_context:
             instructions.append(
-                "Answer the service question first. Mention that pricing or detailed planning "
-                "depends on shipment requirements; the controller will add contact details."
-            )
-        if analysis.general_logistics and not chunks:
-            instructions.append(
-                "This is general logistics guidance. Do not claim it is a Paramount-specific service."
+                "Label general guidance carefully and do not present it as a confirmed "
+                "Paramount Logistics capability."
             )
 
-        return self.generator.answer(
-            question=message,
-            context=context,
-            history=memory.as_text(),
-            intent_analysis=json.dumps(analysis.__dict__, ensure_ascii=True),
-            controller_instructions="\n".join(f"- {item}" for item in instructions),
+        try:
+            generated = self.generator.answer(
+                question=message,
+                context=context,
+                history=memory.history_for_planner(),
+                conversation_state=memory.state_for_planner(),
+                intent_analysis=analysis.model_dump_json(),
+                controller_instructions="\n".join(f"- {item}" for item in instructions),
+            )
+        except Exception as exc:
+            logger.error("Answer generation failed.", exc_info=exc)
+            return (
+                "I found relevant company information, but I couldn't prepare the answer "
+                "right now. Please try again shortly."
+            )
+        sanitized = self.sanitizer.sanitize(generated, set())
+        return limit_words(sanitized, self.settings.response_max_words)
+
+    def _pricing_guidance(
+        self,
+        analysis: IntentAnalysis,
+        memory: ConversationMemory,
+    ) -> tuple[str, PendingQuestion | None]:
+        context = {**memory.shipment_context, **analysis.entities.populated()}
+        required = ("origin", "destination", "service_mode", "cargo_type")
+        missing = analysis.missing_fields or [
+            field for field in required if not context.get(field)
+        ]
+        if not missing:
+            return (
+                "Pricing depends on the shipment's weight or volume, schedule, and handling "
+                "requirements. The team can prepare an exact quotation from the details provided.",
+                None,
+            )
+
+        labels = {
+            "origin": "pickup location",
+            "destination": "destination",
+            "service_mode": "preferred shipping method",
+            "cargo_type": "type of goods",
+            "weight": "weight or volume",
+            "dimensions": "cargo dimensions",
+            "shipment_date": "approximate shipment date",
+        }
+        requested = [labels.get(field, field.replace("_", " ")) for field in missing[:4]]
+        question = "For an accurate quotation, please share " + natural_join(requested) + "."
+        pending = PendingQuestion(
+            topic=self._active_topic(analysis, memory),
+            question=question,
+            expected_fields=missing,
+            resume_query=analysis.resolved_query,
+            created_at=memory.assistant_message_count + 1,
         )
+        return question, pending
 
     def _tracking_block(self) -> str:
-        return f"**Shipment tracking**\n\nYou can track your shipment here:\n{self.settings.tracking_url}"
-
-    def _handoff_block(self, memory: ConversationMemory, analysis: IntentAnalysis) -> str:
-        if memory.contact_card_shown and not analysis.show_contact_details:
-            return (
-                "As mentioned earlier, our Head of Services can help with pricing, "
-                "custom quotations, or a detailed logistics consultation."
-            )
-
-        memory.contact_card_shown = True
-        memory.mark_handoff_suggested()
-        return (
-            "Need a customised quotation or logistics consultation?\n\n"
-            "Please contact our Head of Services:\n\n"
-            "Name:\n"
-            f"{self.settings.head_of_services_name}\n\n"
-            "Email:\n"
-            f"{self.settings.head_of_services_email}\n\n"
-            "Phone:\n"
-            f"{self.settings.head_of_services_phone}"
-        )
-
-    def _head_of_services_block(
-        self,
-        memory: ConversationMemory,
-        analysis: IntentAnalysis,
-    ) -> str:
-        if memory.contact_card_shown and not analysis.show_contact_details:
-            return (
-                "As mentioned earlier, our Head of Services is "
-                f"{self.settings.head_of_services_name}. They can help with service guidance, "
-                "pricing, quotations, and logistics consultation."
-            )
-        return self._handoff_block(memory, analysis)
+        return f"You can track your shipment here: {self.settings.tracking_url}"
 
     def _unavailable_company_info(self, analysis: IntentAnalysis) -> str:
-        topic = ", ".join(analysis.intents) if analysis.intents else "that"
+        topic = natural_join(
+            [
+                intent.replace("_", " ")
+                for intent in analysis.intent_values()
+                if intent not in NON_TOPIC_INTENTS
+            ]
+        )
         return (
-            f"I couldn't find reliable information about {topic} within our available "
-            "company information.\n\n"
-            "If you'd like, I can connect you with our Head of Services who can assist you further."
+            f"I don't have confirmed company information about {topic or 'that request'}."
         )
 
-    def _ask_follow_up(self, analysis: IntentAnalysis) -> str:
-        if analysis.needs_pricing or "shipping" in analysis.intents:
-            memory.remember_pending_question("shipping")
-            return (
-                "I can help narrow that down. Is the shipment domestic or international, "
-                "what is the approximate weight or volume, and where is it going?"
-            )
-        return _fallback_response(0)
-
-    def _should_soft_handoff(
-        self,
-        memory: ConversationMemory,
-        analysis: IntentAnalysis,
-    ) -> bool:
-        if memory.user_message_count < 4 or memory.recently_suggested_handoff():
-            return False
-        return analysis.company_specific or analysis.general_logistics or analysis.needs_rag
-
     def _needs_action(self, analysis: IntentAnalysis) -> bool:
-        return (
-            analysis.needs_tracking
+        return bool(
+            analysis.actions
+            or analysis.needs_tracking
             or analysis.needs_pricing
             or analysis.needs_head_of_services
             or analysis.needs_handoff
@@ -328,154 +430,59 @@ class ChatbotService:
             or analysis.general_logistics
         )
 
+    def _active_topic(
+        self,
+        analysis: IntentAnalysis,
+        memory: ConversationMemory,
+    ) -> str:
+        topics = [
+            intent
+            for intent in analysis.intent_values()
+            if intent not in NON_TOPIC_INTENTS
+        ]
+        return topics[0] if topics else memory.active_topic or "shipment"
+
     def _remember(
         self,
         memory: ConversationMemory,
         user_message: str,
         assistant_message: str,
         analysis: IntentAnalysis,
+        draft: ResponseDraft,
     ) -> None:
-        memory.add_user_message(user_message)
-        memory.add_ai_message(assistant_message)
+        meaningful = analysis.dialogue_act not in {
+            "greeting",
+            "small_talk",
+            "gratitude",
+            "farewell",
+        }
+        memory.add_user_message(
+            user_message,
+            dialogue_act=analysis.dialogue_act,
+            meaningful=meaningful,
+        )
+        memory.add_ai_message(
+            assistant_message,
+            dialogue_act="answer",
+            meaningful=meaningful,
+        )
+        memory.update_shipment_context(analysis.entities.populated())
         memory.remember_topics(
             [
                 intent
-                for intent in analysis.intents
-                if intent
-                not in {
-                    "tracking",
-                    "pricing",
-                    "human_handoff",
-                    "head_of_services",
-                    "gratitude",
-                    "acknowledgement",
-                    "greeting",
-                    "small_talk",
-                    "farewell",
-                    "unclear",
-                    "unrelated",
-                    "prompt_injection",
-                }
+                for intent in analysis.intent_values()
+                if intent not in NON_TOPIC_INTENTS
             ]
         )
-        if not analysis.acknowledgement:
+        for contact_id, fields in draft.disclosed_contacts:
+            memory.remember_contact(contact_id, fields)
+
+        if draft.pending_question:
+            memory.pending_question = draft.pending_question
+        elif analysis.dialogue_act not in {
+            "greeting",
+            "small_talk",
+            "gratitude",
+            "farewell",
+        }:
             memory.clear_pending_question()
-
-    def _acknowledgement_response(self, memory: ConversationMemory) -> str:
-        if memory.pending_question_topic:
-            topic = memory.pending_question_topic
-            memory.clear_pending_question()
-            if memory.last_topic:
-                return (
-                    f"Certainly. Continuing with {memory.last_topic}, what would you like "
-                    "me to explain next?"
-                )
-            return (
-                f"Absolutely. To continue with {topic}, please share a little more detail "
-                "so I can guide you properly."
-            )
-        return _acknowledgement_response(memory.user_message_count)
-
-    def _sanitize_response(self, response: str) -> str:
-        replacements = {
-            "According to the retrieved company context, ": "",
-            "According to the retrieved context, ": "",
-            "According to the company data, ": "",
-            "According to page": "In our available information",
-            "Based on the PDF, ": "",
-            "Retrieved company context": "Our available company information",
-            "retrieved company context": "available company information",
-            "retrieved context": "available information",
-            "Pinecone": "internal systems",
-            "RAG": "internal systems",
-        }
-        cleaned = response
-        for old, new in replacements.items():
-            cleaned = cleaned.replace(old, new)
-        return self._remove_unauthorized_emails(cleaned).strip()
-
-    def _remove_unauthorized_emails(self, response: str) -> str:
-        allowed_email = self.settings.head_of_services_email.lower()
-        lines = []
-        for line in response.splitlines():
-            emails = EMAIL_RE.findall(line)
-            if not emails:
-                lines.append(line)
-                continue
-            unauthorized = [email for email in emails if email.lower() != allowed_email]
-            if unauthorized:
-                redacted = EMAIL_RE.sub(
-                    lambda match: match.group(0)
-                    if match.group(0).lower() == allowed_email
-                    else "",
-                    line,
-                ).strip(" ,;:-")
-                if redacted and not redacted.lower().endswith(("at", "email")):
-                    lines.append(redacted)
-                continue
-            lines.append(line)
-        return "\n".join(lines)
-
-
-def _gratitude_response(turn_count: int) -> str:
-    options = [
-        "You're very welcome! If you have any other questions, I'm happy to help.",
-        "My pleasure! Let me know if there's anything else I can assist you with.",
-        "Happy to help! Feel free to reach out if you need anything else.",
-        "You're welcome! Have a wonderful day.",
-    ]
-    return options[turn_count % len(options)]
-
-
-def _greeting_response(turn_count: int, has_context: bool = False) -> str:
-    if has_context:
-        options = [
-            "Hi again! How can I help you further?",
-            "Hello again! What would you like to continue with?",
-            "Welcome back. How may I assist you now?",
-        ]
-    else:
-        options = [
-            "Hello! Welcome to Paramount Logistics. How can I assist you today?",
-            "Hi! It's great to have you here. How can I help you today?",
-            "Hello! How may I assist you with your logistics or shipping needs today?",
-            "Hi there! I'm here to help with your questions today.",
-            "Welcome to Paramount Logistics! What can I help you with today?",
-        ]
-    return options[turn_count % len(options)]
-
-
-def _small_talk_response(turn_count: int) -> str:
-    options = [
-        "I'm doing well, thank you for asking! How can I assist you today?",
-        "I'm doing great, thanks! How may I help you today?",
-        "I'm well, thank you. What can I help you with today?",
-    ]
-    return options[turn_count % len(options)]
-
-
-def _acknowledgement_response(turn_count: int) -> str:
-    options = [
-        "Of course! How can I help?",
-        "Certainly. What would you like to know?",
-        "Absolutely! How may I assist you today?",
-    ]
-    return options[turn_count % len(options)]
-
-
-def _farewell_response(turn_count: int) -> str:
-    options = [
-        "Thank you for contacting Paramount Logistics. Have a wonderful day!",
-        "Take care! If you need any assistance in the future, we're always here to help.",
-        "Goodbye, and thank you for choosing Paramount Logistics!",
-    ]
-    return options[turn_count % len(options)]
-
-
-def _fallback_response(turn_count: int) -> str:
-    options = [
-        "I'm sorry, I didn't quite understand your question. Could you rephrase it or tell me how I can help with your logistics requirements?",
-        "I want to make sure I understand correctly. Could you provide a little more detail about what you need?",
-        "Could you clarify what you're trying to ship or which logistics service you're asking about?",
-    ]
-    return options[turn_count % len(options)]
