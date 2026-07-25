@@ -11,7 +11,7 @@ Each non-social message follows this path:
 2. Use the small Groq planner to resolve intent, references, shipment entities, and actions.
 3. Read exact facts and authorized contacts from `data/company_profile.json`.
 4. Retrieve filtered Pinecone evidence only when descriptive company information is needed.
-5. Generate a concise grounded answer and append deterministic tracking or contact details.
+5. Generate a grounded answer using an adaptive length budget, then append deterministic tracking or contact details.
 6. Store updated shipment context, pending questions, topics, and contact-disclosure recency.
 
 Conversation state uses SQLite by default in the supplied production configuration, with

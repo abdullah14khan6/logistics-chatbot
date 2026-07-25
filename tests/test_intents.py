@@ -74,3 +74,33 @@ def test_string_boolean_is_rejected() -> None:
 def test_unknown_intent_is_rejected() -> None:
     with pytest.raises(ValidationError):
         IntentAnalysis.from_dict({"intents": ["made_up_route"]})
+
+
+def test_response_detail_and_complexity_are_typed() -> None:
+    analysis = IntentAnalysis.from_dict(
+        {
+            "response_detail": "detailed",
+            "question_complexity": "complex",
+        }
+    )
+
+    assert analysis.response_detail == "detailed"
+    assert analysis.question_complexity == "complex"
+
+    with pytest.raises(ValidationError):
+        IntentAnalysis.from_dict({"response_detail": "very_long"})
+
+
+def test_pricing_request_type_is_validated() -> None:
+    analysis = IntentAnalysis.from_dict(
+        {
+            "intents": ["sea_freight", "pricing"],
+            "actions": ["quote"],
+            "pricing_request": "current_exact_rate",
+        }
+    )
+
+    assert analysis.pricing_request == "current_exact_rate"
+
+    with pytest.raises(ValidationError):
+        IntentAnalysis.from_dict({"pricing_request": "live-ish"})

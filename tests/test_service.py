@@ -146,6 +146,102 @@ def test_tracking_and_quote_are_both_handled_without_retrieval() -> None:
     assert retriever.calls == 0
 
 
+def test_exact_current_rate_uses_deterministic_unavailable_wording() -> None:
+    analysis = IntentAnalysis(
+        intents=["sea_freight", "pricing"],
+        actions=["quote"],
+        needs_pricing=True,
+        pricing_request="current_exact_rate",
+        entities={
+            "origin": "Shanghai",
+            "service_mode": "sea freight",
+        },
+        missing_fields=["destination", "cargo_type"],
+        confidence=0.98,
+    )
+    retriever = FakeRetriever([chunk()])
+    generator = FakeGenerator("I'm having trouble providing the exact rate.")
+
+    result = service(
+        analysis,
+        retriever=retriever,
+        generator=generator,
+    ).chat("What is today's exact sea freight rate from Shanghai?", "s1")
+
+    assert "I can't provide an exact current freight rate" in result.response
+    assert "destination and type of goods" in result.response
+    assert "having trouble" not in result.response
+    assert generator.calls == 0
+    assert retriever.calls == 0
+
+
+def test_exact_rate_policy_is_enforced_when_planner_labels_it_as_quotation() -> None:
+    analysis = IntentAnalysis(
+        intents=["sea_freight", "pricing"],
+        actions=["quote"],
+        needs_pricing=True,
+        pricing_request="quotation",
+        entities={
+            "origin": "Shanghai",
+            "service_mode": "sea freight",
+        },
+        missing_fields=["cargo_type"],
+        confidence=0.9,
+    )
+    generator = FakeGenerator("I'm having trouble providing the rate.")
+
+    result = service(analysis, generator=generator).chat(
+        "What is today's exact sea freight rate from Shanghai?",
+        "s1",
+    )
+
+    assert "I can't provide an exact current freight rate" in result.response
+    assert "destination and type of goods" in result.response
+    assert "having trouble" not in result.response
+    assert generator.calls == 0
+
+
+def test_failed_planner_continues_pending_quote_with_short_cargo_answer() -> None:
+    analyses = [
+        IntentAnalysis(
+            intents=["sea_freight", "pricing"],
+            actions=["quote"],
+            needs_pricing=True,
+            pricing_request="current_exact_rate",
+            entities={
+                "origin": "Shanghai",
+                "service_mode": "sea freight",
+            },
+            missing_fields=["destination", "cargo_type"],
+            resolved_query="sea freight quotation from Shanghai",
+            confidence=0.95,
+        ),
+        IntentAnalysis(
+            dialogue_act="clarification",
+            intents=["unclear"],
+            actions=["clarify"],
+            unclear=True,
+            clarification_question=(
+                "I'm having trouble processing that request right now. "
+                "Please try again shortly."
+            ),
+            confidence=0.0,
+        ),
+    ]
+    bot = service(analyses, generator=FakeGenerator())
+
+    first = bot.chat(
+        "What is today's exact sea freight rate from Shanghai?",
+        "s1",
+    )
+    follow_up = bot.chat("footballs", "s1")
+
+    assert "destination and type of goods" in first.response
+    assert "destination" in follow_up.response
+    assert "type of goods" not in follow_up.response
+    assert "having trouble" not in follow_up.response
+
+
 def test_prompt_injection_is_refused_without_retrieval() -> None:
     analysis = IntentAnalysis(
         dialogue_act="security",
@@ -470,7 +566,7 @@ def test_generated_email_is_removed_without_explicit_contact_action() -> None:
     assert "warehouse@example.com" not in result.response
 
 
-def test_generator_receives_concise_response_contract() -> None:
+def test_generator_receives_standard_response_contract() -> None:
     analysis = IntentAnalysis(
         intents=["warehousing"],
         actions=["company_lookup"],
@@ -481,22 +577,80 @@ def test_generator_receives_concise_response_contract() -> None:
 
     service(analysis, generator=generator).chat("warehousing?", "s1")
 
-    assert "under 100 words" in generator.instructions
+    assert "up to 140 words" in generator.instructions
+    assert "Do not pad" in generator.instructions
     assert "Ask no follow-up question" in generator.instructions
 
 
-def test_generated_answer_is_capped_to_configured_word_limit() -> None:
+def test_standard_generated_answer_is_capped_to_configured_word_limit() -> None:
     analysis = IntentAnalysis(
         intents=["warehousing"],
         actions=["company_lookup"],
         company_specific=True,
         needs_rag=True,
     )
-    generator = FakeGenerator(" ".join(f"word{index}" for index in range(150)))
+    generator = FakeGenerator(" ".join(f"word{index}" for index in range(180)))
 
     result = service(analysis, generator=generator).chat("warehousing?", "s1")
 
-    assert len(result.response.split()) <= 100
+    assert len(result.response.split()) <= 140
+
+
+def test_brief_request_uses_brief_word_budget() -> None:
+    analysis = IntentAnalysis(
+        intents=["warehousing"],
+        actions=["company_lookup"],
+        company_specific=True,
+        needs_rag=True,
+        response_detail="brief",
+    )
+    generator = FakeGenerator(" ".join(f"word{index}" for index in range(100)))
+
+    result = service(analysis, generator=generator).chat(
+        "Briefly describe warehousing.",
+        "s1",
+    )
+
+    assert "up to 60 words" in generator.instructions
+    assert len(result.response.split()) <= 60
+
+
+def test_complex_request_uses_complex_word_budget() -> None:
+    analysis = IntentAnalysis(
+        intents=["air_freight", "sea_freight", "documentation"],
+        actions=["company_lookup"],
+        company_specific=True,
+        needs_rag=True,
+        question_complexity="complex",
+    )
+    generator = FakeGenerator(" ".join(f"word{index}" for index in range(300)))
+
+    result = service(analysis, generator=generator).chat(
+        "Compare air and sea freight and explain the documents.",
+        "s1",
+    )
+
+    assert "up to 250 words" in generator.instructions
+    assert len(result.response.split()) <= 250
+
+
+def test_explicit_detailed_request_uses_detailed_word_budget() -> None:
+    analysis = IntentAnalysis(
+        intents=["documentation"],
+        actions=["general_answer"],
+        general_logistics=True,
+        response_detail="detailed",
+        question_complexity="complex",
+    )
+    generator = FakeGenerator(" ".join(f"word{index}" for index in range(450)))
+
+    result = service(analysis, generator=generator).chat(
+        "Explain the complete documentation process in detail.",
+        "s1",
+    )
+
+    assert "up to 400 words" in generator.instructions
+    assert len(result.response.split()) <= 400
 
 
 def test_retrieval_excludes_staff_directory() -> None:

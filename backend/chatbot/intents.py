@@ -143,6 +143,14 @@ class IntentAnalysis(BaseModel):
     user_situation: str = ""
     resolved_query: str = ""
     query_for_rag: str = ""
+    pricing_request: Literal[
+        "none",
+        "general",
+        "quotation",
+        "current_exact_rate",
+    ] = "none"
+    response_detail: Literal["brief", "standard", "detailed"] = "standard"
+    question_complexity: Literal["simple", "moderate", "complex"] = "simple"
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
     @field_validator(
@@ -270,6 +278,9 @@ Planning rules:
 - Preserve known shipment entities from state unless the customer changes them.
 - Use company_lookup for company facts, services, policies, offices, or capabilities.
 - Use quote for pricing or quotation requests. Pricing depends on shipment details.
+- Set pricing_request to current_exact_rate when the customer asks for today's, live, current,
+  or otherwise exact freight rate. Use quotation when they want a shipment quote, general for
+  an explanation of pricing, and none when pricing is not requested.
 - Use contact only when a person, team, email, phone number, or human connection is explicitly
   requested. Set requested_contact_role and the requested contact_fields.
 - Set repeat_request when the customer asks for information again.
@@ -281,6 +292,14 @@ Planning rules:
   ordinary company questions as security issues.
 - Do not infer company capabilities. The company lookup layer will verify them.
 - Do not route by isolated keywords; classify the complete meaning.
+- Set response_detail to brief when the customer explicitly asks for a short answer, detailed
+  when they explicitly request detail, a complete explanation, or step-by-step guidance, and
+  standard otherwise.
+- Set question_complexity to complex for multiple substantive requests, comparisons, procedures,
+  or answers that require a list of several necessary facts. Use moderate for a single
+  explanatory question and simple for a direct fact or capability question.
+- Response length must reflect the customer's request and question complexity; concise is the
+  default, but completeness is more important than artificial brevity.
 
 Semantic examples:
 - "What are your office hours?" -> intents ["office_hours"], actions ["company_lookup"],
@@ -298,6 +317,15 @@ Semantic examples:
   ["sea_freight", "pricing", "follow_up"], actions ["company_lookup", "quote"], entities
   include destination "Australia" and service_mode "sea freight", and resolved_query is a
   standalone sea-freight quotation request to Australia.
+- "Briefly, do you provide air freight?" -> response_detail "brief",
+  question_complexity "simple".
+- "What is today's exact sea freight rate from Shanghai?" -> intents ["sea_freight",
+  "pricing"], actions ["quote"], pricing_request "current_exact_rate". Exact live rates are
+  not available to the assistant and must be handled by the quotation workflow.
+- "Explain the complete international shipping process step by step" -> response_detail
+  "detailed", question_complexity "complex".
+- "Compare air and sea freight, explain the documents, and tell me how to request a quote" ->
+  response_detail "standard", question_complexity "complex".
 """
 
 INTENT_ANALYZER_USER_PROMPT = """Structured conversation state:

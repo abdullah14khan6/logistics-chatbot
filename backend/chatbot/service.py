@@ -1,4 +1,5 @@
 import logging
+import re
 from dataclasses import dataclass, field
 from uuid import uuid4
 
@@ -7,7 +8,12 @@ from backend.chatbot.company_answers import (
     CompanyAnswerProvider,
 )
 from backend.chatbot.contact_policy import ContactPolicy
-from backend.chatbot.intents import IntentAnalysis, IntentAnalyzer, PlannedAction
+from backend.chatbot.intents import (
+    DomainIntent,
+    IntentAnalysis,
+    IntentAnalyzer,
+    PlannedAction,
+)
 from backend.chatbot.memory import (
     ConversationMemory,
     ConversationStore,
@@ -40,6 +46,16 @@ NON_TOPIC_INTENTS = SOCIAL_INTENTS | {
     "unclear",
     "unrelated",
     "prompt_injection",
+}
+PRICING_CONTEXT_INTENTS = {
+    "air_freight",
+    "sea_freight",
+    "ocean_freight",
+    "express_shipping",
+    "warehousing",
+    "door_to_door",
+    "transportation",
+    "freight_forwarding",
 }
 
 
@@ -115,6 +131,11 @@ class ChatbotService:
                     analysis.action_values(),
                     analysis.confidence,
                 )
+            analysis = self._recover_or_normalize_plan(
+                clean_message,
+                analysis,
+                memory,
+            )
 
             draft = self._handle_message(clean_message, analysis, memory)
             answer = self.sanitizer.sanitize(draft.text, draft.allowed_emails)
@@ -253,6 +274,63 @@ class ChatbotService:
             pending_question=pending_question,
         )
 
+    def _recover_or_normalize_plan(
+        self,
+        message: str,
+        analysis: IntentAnalysis,
+        memory: ConversationMemory,
+    ) -> IntentAnalysis:
+        if (
+            analysis.confidence == 0.0
+            and analysis.unclear
+            and memory.pending_question
+        ):
+            pending = memory.pending_question
+            expected = list(pending.expected_fields)
+            entities: dict[str, str] = {}
+            if len(expected) == 1:
+                entities[expected[0]] = message
+            elif "cargo_type" in expected:
+                entities["cargo_type"] = message
+
+            if entities:
+                remaining = [field for field in expected if field not in entities]
+                intents: list[DomainIntent] = [
+                    DomainIntent.PRICING,
+                    DomainIntent.FOLLOW_UP,
+                ]
+                try:
+                    topic_intent = DomainIntent(pending.topic)
+                except ValueError:
+                    topic_intent = None
+                if topic_intent and topic_intent not in intents:
+                    intents.insert(0, topic_intent)
+                analysis = IntentAnalysis(
+                    dialogue_act="follow_up",
+                    intents=intents,
+                    actions=[PlannedAction.QUOTE],
+                    follow_up=True,
+                    needs_pricing=True,
+                    pricing_request="quotation",
+                    entities=entities,
+                    missing_fields=remaining,
+                    resolved_query=pending.resume_query,
+                    confidence=0.4,
+                )
+
+        if analysis.needs_pricing and self._asks_for_exact_current_rate(message):
+            analysis.pricing_request = "current_exact_rate"
+        return analysis
+
+    @staticmethod
+    def _asks_for_exact_current_rate(message: str) -> bool:
+        normalized = " ".join(message.casefold().split())
+        has_rate = bool(re.search(r"\b(rate|rates|price|pricing|cost)\b", normalized))
+        has_live_qualifier = bool(
+            re.search(r"\b(today(?:'s)?|current|live|exact|right now)\b", normalized)
+        )
+        return has_rate and has_live_qualifier
+
     def _should_generate(
         self,
         analysis: IntentAnalysis,
@@ -260,6 +338,11 @@ class ChatbotService:
     ) -> bool:
         intents = set(analysis.intent_values())
         remaining = intents - STRUCTURED_ONLY_INTENTS - NON_TOPIC_INTENTS
+        if (
+            analysis.pricing_request == "current_exact_rate"
+            and remaining <= PRICING_CONTEXT_INTENTS
+        ):
+            return False
         if remaining:
             return True
         if analysis.general_logistics:
@@ -321,8 +404,12 @@ class ChatbotService:
             for intent in analysis.intent_values()
             if memory.topic_was_explained(intent)
         ]
+        word_limit = self._response_word_limit(analysis)
         instructions = [
-            f"Keep the answer under {self.settings.response_max_words} words.",
+            (
+                f"Use up to {word_limit} words when needed. Do not pad the answer merely "
+                "to approach this limit."
+            ),
             "Answer the current question first and include only relevant information.",
             "Do not add contact details, a generic closing, or an unsolicited service list.",
             "Ask no follow-up question; the controller handles clarifications.",
@@ -364,7 +451,16 @@ class ChatbotService:
                 "right now. Please try again shortly."
             )
         sanitized = self.sanitizer.sanitize(generated, set())
-        return limit_words(sanitized, self.settings.response_max_words)
+        return limit_words(sanitized, word_limit)
+
+    def _response_word_limit(self, analysis: IntentAnalysis) -> int:
+        if analysis.response_detail == "detailed":
+            return self.settings.response_detailed_max_words
+        if analysis.response_detail == "brief":
+            return self.settings.response_brief_max_words
+        if analysis.question_complexity == "complex":
+            return self.settings.response_complex_max_words
+        return self.settings.response_max_words
 
     def _pricing_guidance(
         self,
@@ -373,9 +469,26 @@ class ChatbotService:
     ) -> tuple[str, PendingQuestion | None]:
         context = {**memory.shipment_context, **analysis.entities.populated()}
         required = ("origin", "destination", "service_mode", "cargo_type")
-        missing = analysis.missing_fields or [
+        inferred_missing = [
             field for field in required if not context.get(field)
         ]
+        missing = list(
+            dict.fromkeys([*inferred_missing, *analysis.missing_fields])
+        )
+        if analysis.pricing_request == "current_exact_rate":
+            explanation = (
+                "I can't provide an exact current freight rate because rates change with "
+                "carrier availability, route, cargo details, and sailing schedule."
+            )
+            if not missing:
+                return (
+                    explanation
+                    + " The team can prepare a current quotation from the details provided.",
+                    None,
+                )
+        else:
+            explanation = ""
+
         if not missing:
             return (
                 "Pricing depends on the shipment's weight or volume, schedule, and handling "
@@ -394,6 +507,8 @@ class ChatbotService:
         }
         requested = [labels.get(field, field.replace("_", " ")) for field in missing[:4]]
         question = "For an accurate quotation, please share " + natural_join(requested) + "."
+        if explanation:
+            question = explanation + "\n\n" + question
         pending = PendingQuestion(
             topic=self._active_topic(analysis, memory),
             question=question,

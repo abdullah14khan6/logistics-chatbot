@@ -82,6 +82,9 @@ class Settings:
     llm_max_retries: int
     response_max_tokens: int
     response_max_words: int
+    response_brief_max_words: int
+    response_complex_max_words: int
+    response_detailed_max_words: int
     memory_backend: str
     memory_db_path: Path
     memory_max_turns: int
@@ -131,8 +134,17 @@ class Settings:
             "groq_temperature": _env_float("GROQ_TEMPERATURE", 0.2),
             "llm_timeout_seconds": _env_float("LLM_TIMEOUT_SECONDS", 20.0),
             "llm_max_retries": _env_int("LLM_MAX_RETRIES", 1),
-            "response_max_tokens": _env_int("RESPONSE_MAX_TOKENS", 220),
-            "response_max_words": _env_int("RESPONSE_MAX_WORDS", 100),
+            "response_max_tokens": _env_int("RESPONSE_MAX_TOKENS", 600),
+            "response_max_words": _env_int("RESPONSE_MAX_WORDS", 140),
+            "response_brief_max_words": _env_int(
+                "RESPONSE_BRIEF_MAX_WORDS", 60
+            ),
+            "response_complex_max_words": _env_int(
+                "RESPONSE_COMPLEX_MAX_WORDS", 250
+            ),
+            "response_detailed_max_words": _env_int(
+                "RESPONSE_DETAILED_MAX_WORDS", 400
+            ),
             "memory_backend": _env("MEMORY_BACKEND", "memory").strip().lower(),
             "memory_db_path": _env_path(
                 "MEMORY_DB_PATH", "data/conversations.db"
