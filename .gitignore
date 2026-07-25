@@ -9,10 +9,6 @@ __pycache__/
 .ruff_cache/
 .logs/
 .downloads/
-data/.ingestion_manifest.json
-data/conversations.db*
-data/*.pdf
-data/*api key*.txt
-data/service head info.txt
-data/tracking link.txt
-!data/.gitkeep
+docs/
+data/
+tests/
