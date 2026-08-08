@@ -11,6 +11,8 @@ STRUCTURED_ONLY_INTENTS = {
     "shipment_delay",
     "company_services",
     "amazon_fba",
+    "leadership",
+    "subsidiaries",
 }
 
 
@@ -60,7 +62,87 @@ class CompanyAnswerProvider:
                     "project cargo, express shipping, e-commerce, and Amazon FBA logistics."
                 )
 
+        if "leadership" in intents:
+            parts.append(self._leadership_answer(message, analysis))
+
+        if "subsidiaries" in intents:
+            lines = ["Paramount Logistics International's group companies include:"]
+            for company in self.profile.subsidiaries:
+                lines.append(f"- **{company.name}:** {company.description}")
+            parts.append("\n".join(lines))
+
         return "\n\n".join(parts)
+
+    def _leadership_answer(self, message: str, analysis: IntentAnalysis) -> str:
+        query = " ".join(
+            value
+            for value in (
+                analysis.entities.person_name,
+                analysis.requested_contact_role,
+                message,
+            )
+            if value
+        )
+        leader = self.profile.resolve_leader(query)
+        phone_requested = "phone" in analysis.contact_fields or bool(
+            re.search(r"\b(phone|number|mobile|call)\b", message, re.IGNORECASE)
+        )
+        email_requested = "email" in analysis.contact_fields or bool(
+            re.search(r"\b(email|e-mail|contact)\b", message, re.IGNORECASE)
+        )
+
+        if leader:
+            lines = [
+                f"**{leader.name}**",
+                f"{leader.title}, {leader.company}.",
+            ]
+            if leader.department and leader.department != "Executive Leadership":
+                lines.append(f"- **Department:** {leader.department}")
+            if email_requested and leader.email:
+                lines.append(f"- **Email:** {leader.email}")
+            if phone_requested:
+                lines.append("Leadership phone numbers are not shared.")
+            return "\n".join(lines)
+
+        if analysis.entities.person_name:
+            return (
+                "I don't have confirmed leadership information about "
+                f"{analysis.entities.person_name}."
+            )
+
+        if phone_requested:
+            return "Leadership phone numbers are not shared."
+
+        lines = ["PLI's leadership and management team includes:"]
+        lines.extend(
+            f"- **{leader.name}:** {leader.title}"
+            for leader in self.profile.leadership
+        )
+        return "\n".join(lines)
+
+    def authorized_emails(
+        self,
+        message: str,
+        analysis: IntentAnalysis,
+    ) -> set[str]:
+        if "leadership" not in analysis.intent_values():
+            return set()
+        email_requested = "email" in analysis.contact_fields or bool(
+            re.search(r"\b(email|e-mail|contact)\b", message, re.IGNORECASE)
+        )
+        if not email_requested:
+            return set()
+        query = " ".join(
+            value
+            for value in (
+                analysis.entities.person_name,
+                analysis.requested_contact_role,
+                message,
+            )
+            if value
+        )
+        leader = self.profile.resolve_leader(query)
+        return {leader.email.lower()} if leader and leader.email else set()
 
     def evidence(self, analysis: IntentAnalysis) -> str:
         intents = set(analysis.intent_values())
@@ -79,6 +161,12 @@ class CompanyAnswerProvider:
                     "- Value-added services: "
                     + ", ".join(self.profile.value_added_services),
                 ]
+            )
+
+        if "subsidiaries" in intents:
+            lines.extend(
+                f"- Group company: {company.name} - {company.description}"
+                for company in self.profile.subsidiaries
             )
 
         service_terms = {

@@ -49,6 +49,16 @@ class ResponseSanitizer:
             cleaned = cleaned.replace(old, new)
         return self._remove_unauthorized_emails(cleaned, allowed_emails).strip()
 
+    @staticmethod
+    def remove_quotation_promises(response: str) -> str:
+        promise_sentence = re.compile(
+            r"(?im)(?:^|(?<=[.!?]))\s*"
+            r"(?:I|we)\s*(?:'ll|will|can|would)\s+"
+            r"(?:prepare|provide|send|issue|create|give)\b"
+            r"[^.!?\n]*\b(?:quote|quotation)\b[^.!?\n]*(?:[.!?]|$)"
+        )
+        return promise_sentence.sub("", response).strip()
+
     def _remove_unauthorized_emails(
         self,
         response: str,

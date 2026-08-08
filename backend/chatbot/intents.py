@@ -27,6 +27,7 @@ class DomainIntent(str, Enum):
     COMPANY_SERVICES = "company_services"
     COMPANY_INFORMATION = "company_information"
     LEADERSHIP = "leadership"
+    SUBSIDIARIES = "subsidiaries"
     OFFICE_LOCATIONS = "office_locations"
     OFFICE_HOURS = "office_hours"
     AIR_FREIGHT = "air_freight"
@@ -85,7 +86,13 @@ class ShipmentEntities(BaseModel):
     weight: str = ""
     volume: str = ""
     dimensions: str = ""
+    package_count: str = ""
+    cargo_value: str = ""
     shipment_date: str = ""
+    pickup_required: str = ""
+    delivery_required: str = ""
+    hazardous_status: str = ""
+    temperature_control_status: str = ""
     tracking_number: str = ""
     contact_role: str = ""
     person_name: str = ""
@@ -283,7 +290,14 @@ Planning rules:
 - Always choose the most specific domain intent. Use company_information only when no specific
   intent in the schema applies.
 - Preserve known shipment entities from state unless the customer changes them.
+- Extract shipment details from both natural sentences and labelled customer forms. Map pickup
+  location to origin, preferred shipping method to service_mode, type of goods to cargo_type,
+  shipment ready date to shipment_date, and number of cartons to package_count.
 - Use company_lookup for company facts, services, policies, offices, or capabilities.
+- Use leadership for questions about company leaders, executives, directors, managers, or a
+  named leadership member. Put the person's name in entities.person_name when supplied.
+- Use subsidiaries for questions about subsidiary companies, divisions, brands, or companies
+  in the PLI group.
 - Use quote for pricing or quotation requests. Pricing depends on shipment details.
 - Set pricing_request to current_exact_rate when the customer asks for today's, live, current,
   or otherwise exact freight rate. Use quotation when they want a shipment quote, general for
@@ -319,6 +333,12 @@ Semantic examples:
   "office_hours"], actions ["company_lookup"], company_specific true.
 - "Who is the Head of Sea Freight?" -> intents ["contact", "sea_freight"], actions
   ["contact"], explicit_contact_request true, requested_contact_role "sea_freight".
+- "Who is Hamd Ejaz?" -> intents ["leadership"], actions ["company_lookup"],
+  company_specific true, entities.person_name "Hamd Ejaz".
+- "Who is the CEO?" -> intents ["leadership"], actions ["company_lookup"],
+  company_specific true, entities.person_name "CEO".
+- "What are PLI's subsidiary companies?" -> intents ["subsidiaries"], actions
+  ["company_lookup"], company_specific true.
 - "Service head information" -> intents ["contact", "head_of_services"], actions
   ["contact"], explicit_contact_request true, requested_contact_role "head_of_services".
 - "Can I have his email again?" after an Imports contact -> intents ["contact", "imports",

@@ -140,6 +140,7 @@ class ChatbotService:
                 analysis,
                 memory,
             )
+            self._supplement_shipment_entities(clean_message, analysis)
 
             draft = self._handle_message(clean_message, analysis, memory)
             answer = self.sanitizer.sanitize(draft.text, draft.allowed_emails)
@@ -197,6 +198,9 @@ class ChatbotService:
         structured_answer = self.company_answers.direct_answer(message, analysis)
         if structured_answer:
             response_parts.append(structured_answer)
+            allowed_emails.update(
+                self.company_answers.authorized_emails(message, analysis)
+            )
 
         should_generate = self._should_generate(analysis, structured_answer)
         if should_generate:
@@ -226,7 +230,8 @@ class ChatbotService:
         consultative_service_inquiry = bool(
             set(analysis.intent_values()) & CONSULTATIVE_SERVICE_INTENTS
         )
-        contact_requested = (
+        leadership_request = "leadership" in analysis.intent_values()
+        contact_requested = not leadership_request and (
             analysis.explicit_contact_request
             or analysis.needs_head_of_services
             or analysis.needs_handoff
@@ -349,6 +354,22 @@ class ChatbotService:
 
         if analysis.needs_pricing and self._asks_for_exact_current_rate(message):
             analysis.pricing_request = "current_exact_rate"
+
+        leader_query = " ".join(
+            value
+            for value in (
+                analysis.entities.person_name,
+                analysis.requested_contact_role,
+                message,
+            )
+            if value
+        )
+        if self.profile.resolve_leader(leader_query):
+            if DomainIntent.LEADERSHIP not in analysis.intents:
+                analysis.intents.insert(0, DomainIntent.LEADERSHIP)
+            if PlannedAction.COMPANY_LOOKUP not in analysis.actions:
+                analysis.actions.insert(0, PlannedAction.COMPANY_LOOKUP)
+            analysis.company_specific = True
         return analysis
 
     @staticmethod
@@ -366,6 +387,8 @@ class ChatbotService:
         structured_answer: str,
     ) -> bool:
         intents = set(analysis.intent_values())
+        if structured_answer and intents & {"leadership", "subsidiaries"}:
+            return False
         remaining = intents - STRUCTURED_ONLY_INTENTS - NON_TOPIC_INTENTS
         if (
             analysis.pricing_request == "current_exact_rate"
@@ -468,6 +491,21 @@ class ChatbotService:
                     ),
                 ]
             )
+        if analysis.needs_pricing:
+            instructions.extend(
+                [
+                    (
+                        "If a shipment solution is requested, recommend only the relevant "
+                        "service structure in no more than two concise sentences."
+                    ),
+                    (
+                        "Do not state or estimate any price, duty, tax, transit time, or "
+                        "delivery commitment. Do not promise to prepare, provide, send, or "
+                        "follow up with a quotation. The controller handles quotation limits "
+                        "and the human handoff."
+                    ),
+                ]
+            )
         if "supplier_pickup" in analysis.intent_values():
             instructions.append(
                 "For supplier pickup, confirm the collection capability directly, then invite "
@@ -521,7 +559,64 @@ class ChatbotService:
                 "right now. Please try again shortly."
             )
         sanitized = self.sanitizer.sanitize(generated, set())
+        if analysis.needs_pricing:
+            sanitized = self.sanitizer.remove_quotation_promises(sanitized)
         return limit_words(sanitized, word_limit)
+
+    @staticmethod
+    def _supplement_shipment_entities(
+        message: str,
+        analysis: IntentAnalysis,
+    ) -> None:
+        labels = {
+            "pickup location": "origin",
+            "origin": "origin",
+            "destination": "destination",
+            "total weight": "weight",
+            "weight": "weight",
+            "cargo": "cargo_type",
+            "type of goods": "cargo_type",
+            "number of cartons": "package_count",
+            "package count": "package_count",
+            "preferred shipping method": "service_mode",
+            "shipping method": "service_mode",
+            "cargo value": "cargo_value",
+            "pickup required": "pickup_required",
+            "delivery required": "delivery_required",
+            "shipment ready date": "shipment_date",
+            "ready date": "shipment_date",
+        }
+        label_pattern = "|".join(
+            re.escape(label) for label in sorted(labels, key=len, reverse=True)
+        )
+        pattern = re.compile(
+            rf"(?i)\b({label_pattern})\s*:\s*(.*?)"
+            rf"(?=\s+\b(?:{label_pattern})\s*:|$)"
+        )
+        for match in pattern.finditer(message):
+            field = labels[match.group(1).casefold()]
+            value = match.group(2).strip(" ,.;")
+            if value and not getattr(analysis.entities, field):
+                setattr(analysis.entities, field, value)
+
+        if not analysis.entities.volume:
+            volume = re.search(r"\b\d+(?:\.\d+)?\s*CBM\b", message, re.IGNORECASE)
+            if volume:
+                analysis.entities.volume = volume.group(0)
+        if not analysis.entities.weight:
+            weight = re.search(
+                r"\b\d[\d,]*(?:\.\d+)?\s*(?:kg|kilograms?|tons?)\b",
+                message,
+                re.IGNORECASE,
+            )
+            if weight:
+                analysis.entities.weight = weight.group(0)
+        if re.search(r"\bnon[- ]?hazardous\b", message, re.IGNORECASE):
+            analysis.entities.hazardous_status = "non-hazardous"
+        elif re.search(r"\bhazardous\b", message, re.IGNORECASE):
+            analysis.entities.hazardous_status = "hazardous"
+        if re.search(r"\b(?:does not require|no) refrigeration\b", message, re.IGNORECASE):
+            analysis.entities.temperature_control_status = "not required"
 
     def _response_word_limit(self, analysis: IntentAnalysis) -> int:
         if analysis.response_detail == "detailed":
@@ -542,27 +637,30 @@ class ChatbotService:
         inferred_missing = [
             field for field in required if not context.get(field)
         ]
-        missing = list(
-            dict.fromkeys([*inferred_missing, *analysis.missing_fields])
+        aliases = {
+            "pickup_location": "origin",
+            "preferred_shipping_method": "service_mode",
+            "type_of_goods": "cargo_type",
+            "shipment_ready_date": "shipment_date",
+            "number_of_cartons": "package_count",
+        }
+        planner_missing = [
+            aliases.get(field, field)
+            for field in analysis.missing_fields
+            if not context.get(aliases.get(field, field))
+        ]
+        missing = list(dict.fromkeys([*inferred_missing, *planner_missing]))
+        explanation = (
+            "I can't provide an exact quotation, confirmed transit time, or duties and taxes "
+            "in chat. These require current carrier rates, shipment classification, and "
+            "customs assessment."
         )
-        if analysis.pricing_request == "current_exact_rate":
-            explanation = (
-                "I can't provide an exact current freight rate because rates change with "
-                "carrier availability, route, cargo details, and sailing schedule."
-            )
-            if not missing:
-                return (
-                    explanation
-                    + " The team can prepare a current quotation from the details provided.",
-                    None,
-                )
-        else:
-            explanation = ""
 
         if not missing:
             return (
-                "Pricing depends on the shipment's weight or volume, schedule, and handling "
-                "requirements. The team can prepare an exact quotation from the details provided.",
+                explanation
+                + " You've provided enough shipment information for our team to prepare "
+                "the quotation.",
                 None,
             )
 
@@ -576,9 +674,12 @@ class ChatbotService:
             "shipment_date": "approximate shipment date",
         }
         requested = [labels.get(field, field.replace("_", " ")) for field in missing[:4]]
-        question = "For an accurate quotation, please share " + natural_join(requested) + "."
-        if explanation:
-            question = explanation + "\n\n" + question
+        question = (
+            explanation
+            + "\n\nTo send this inquiry for pricing, please share "
+            + natural_join(requested)
+            + "."
+        )
         pending = PendingQuestion(
             topic=self._active_topic(analysis, memory),
             question=question,

@@ -61,6 +61,42 @@ class CompanyContact(BaseModel):
         return requested in {normalize_lookup(candidate) for candidate in candidates}
 
 
+class CompanyLeader(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+    title: str
+    department: str
+    company: str
+    email: str = ""
+    aliases: list[str] = Field(default_factory=list)
+
+    def matches(self, query: str) -> bool:
+        normalized = normalize_lookup(query)
+        candidates = [self.id, self.name, self.title, *self.aliases]
+        return any(
+            candidate_normalized
+            and (
+                candidate_normalized == normalized
+                or candidate_normalized in normalized
+            )
+            for candidate in candidates
+            if (candidate_normalized := normalize_lookup(candidate))
+        )
+
+
+class SubsidiaryCompany(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+    relationship: str
+    description: str
+    aliases: list[str] = Field(default_factory=list)
+    relationship_confirmed: bool = False
+
+
 class ContactResolution(BaseModel):
     contact: CompanyContact
     requested_role: str
@@ -75,6 +111,8 @@ class CompanyProfile(BaseModel):
     offices: list[CompanyOffice] = Field(default_factory=list)
     policies: CompanyPolicies
     capabilities: CompanyCapabilities
+    leadership: list[CompanyLeader] = Field(default_factory=list)
+    subsidiaries: list[SubsidiaryCompany] = Field(default_factory=list)
     default_contact_role: str
     contacts: list[CompanyContact] = Field(default_factory=list)
     contact_routing: dict[str, str] = Field(default_factory=dict)
@@ -125,7 +163,16 @@ class CompanyProfile(BaseModel):
         )
 
     def public_emails(self) -> set[str]:
-        return {contact.email.lower() for contact in self.contacts if contact.email}
+        contact_emails = {
+            contact.email.lower() for contact in self.contacts if contact.email
+        }
+        leadership_emails = {
+            leader.email.lower() for leader in self.leadership if leader.email
+        }
+        return contact_emails | leadership_emails
+
+    def resolve_leader(self, query: str) -> CompanyLeader | None:
+        return next((leader for leader in self.leadership if leader.matches(query)), None)
 
 
 @lru_cache(maxsize=8)
