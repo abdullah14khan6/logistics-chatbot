@@ -104,7 +104,9 @@ class CompanyAnswerProvider:
                 lines.append("Leadership phone numbers are not shared.")
             return "\n".join(lines)
 
-        if analysis.entities.person_name:
+        if analysis.entities.person_name and not self._is_generic_leadership_query(
+            analysis.entities.person_name
+        ):
             return (
                 "I don't have confirmed leadership information about "
                 f"{analysis.entities.person_name}."
@@ -113,12 +115,38 @@ class CompanyAnswerProvider:
         if phone_requested:
             return "Leadership phone numbers are not shared."
 
-        lines = ["PLI's leadership and management team includes:"]
+        primary_leaders = [
+            leader
+            for leader in self.profile.leadership
+            if any(
+                title in leader.title.casefold()
+                for title in ("chief executive", "director", "general manager")
+            )
+        ]
+        lines = ["PLI's leadership team includes:"]
         lines.extend(
             f"- **{leader.name}:** {leader.title}"
-            for leader in self.profile.leadership
+            for leader in primary_leaders
         )
         return "\n".join(lines)
+
+    @staticmethod
+    def _is_generic_leadership_query(value: str) -> bool:
+        tokens = set(normalize_lookup(value).split())
+        generic_tokens = {
+            "leadership",
+            "leaders",
+            "management",
+            "managers",
+            "team",
+            "paramount",
+            "pli",
+            "company",
+            "group",
+            "of",
+            "the",
+        }
+        return bool(tokens) and tokens <= generic_tokens
 
     def authorized_emails(
         self,
