@@ -231,7 +231,21 @@ class ChatbotService:
             set(analysis.intent_values()) & CONSULTATIVE_SERVICE_INTENTS
         )
         leadership_request = "leadership" in analysis.intent_values()
-        contact_requested = not leadership_request and (
+        leadership_contact_query = (
+            analysis.requested_contact_role
+            or analysis.entities.contact_role
+            or analysis.entities.person_name
+        )
+        leadership_contact_only = bool(
+            leadership_request
+            and leadership_contact_query
+            and self.profile.resolve_leader(leadership_contact_query)
+            and not analysis.needs_head_of_services
+            and not analysis.needs_handoff
+            and not analysis.needs_pricing
+            and not consultative_service_inquiry
+        )
+        contact_requested = not leadership_contact_only and (
             analysis.explicit_contact_request
             or analysis.needs_head_of_services
             or analysis.needs_handoff
@@ -387,9 +401,15 @@ class ChatbotService:
         structured_answer: str,
     ) -> bool:
         intents = set(analysis.intent_values())
-        if structured_answer and intents & {"leadership", "subsidiaries"}:
-            return False
         remaining = intents - STRUCTURED_ONLY_INTENTS - NON_TOPIC_INTENTS
+        if (
+            structured_answer
+            and "leadership" in intents
+            and analysis.explicit_contact_request
+            and analysis.question_complexity == "simple"
+            and not analysis.needs_rag
+        ):
+            return False
         if (
             analysis.pricing_request == "current_exact_rate"
             and remaining <= PRICING_CONTEXT_INTENTS

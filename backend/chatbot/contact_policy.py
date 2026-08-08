@@ -24,6 +24,7 @@ NON_CONTACT_TOPICS = {
     "unrelated",
     "prompt_injection",
     "company_information",
+    "leadership",
     "company_services",
     "general_logistics",
     "office_locations",
