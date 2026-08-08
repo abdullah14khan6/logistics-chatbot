@@ -115,13 +115,14 @@ class CompanyAnswerProvider:
         if phone_requested:
             return "Leadership phone numbers are not shared."
 
+        public_leadership_ids = {
+            "chief_executive_officer",
+            "director_sales",
+        }
         primary_leaders = [
             leader
             for leader in self.profile.leadership
-            if any(
-                title in leader.title.casefold()
-                for title in ("chief executive", "director", "general manager")
-            )
+            if leader.id in public_leadership_ids
         ]
         lines = ["PLI's leadership team includes:"]
         lines.extend(
