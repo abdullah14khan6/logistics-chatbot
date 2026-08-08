@@ -77,6 +77,23 @@ Existing vectors for the document are removed before replacement to prevent stal
 
 The current source PDF is represented by 23 vectors in the `company-docs` namespace.
 
+## Groq Key Failover
+
+Configure up to three Groq keys:
+
+```env
+GROQ_API_KEY=primary-key
+GROQ_FALLBACK_API_KEY_1=first-fallback
+GROQ_FALLBACK_API_KEY_2=second-fallback
+GROQ_FAILOVER_COOLDOWN_SECONDS=14400
+```
+
+Intent analysis and answer generation automatically try the next configured key after a
+rate limit, timeout, connection failure, or Groq server error. Authentication and request
+validation errors do not trigger rotation. Keys belonging to the same Groq organization may
+share organization-level limits and therefore may not provide additional quota. A rate-limited
+key remains out of rotation for four hours by default.
+
 ## Run the API
 
 ```powershell

@@ -60,6 +60,9 @@ class ResponseSanitizer:
             if not emails:
                 lines.append(line)
                 continue
+            if all(email.lower() in allowed_emails for email in emails):
+                lines.append(line)
+                continue
             redacted = EMAIL_RE.sub(
                 lambda match: (
                     match.group(0)

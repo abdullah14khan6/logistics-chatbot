@@ -55,6 +55,9 @@ def _env_path(name: str, default: str) -> Path:
 @dataclass(frozen=True, init=False)
 class Settings:
     groq_api_key: str
+    groq_fallback_api_key_1: str
+    groq_fallback_api_key_2: str
+    groq_failover_cooldown_seconds: int
     pinecone_api_key: str
     pinecone_index_name: str
     pinecone_host: str
@@ -103,6 +106,11 @@ class Settings:
         _load_env_file()
         values = {
             "groq_api_key": _env("GROQ_API_KEY"),
+            "groq_fallback_api_key_1": _env("GROQ_FALLBACK_API_KEY_1"),
+            "groq_fallback_api_key_2": _env("GROQ_FALLBACK_API_KEY_2"),
+            "groq_failover_cooldown_seconds": _env_int(
+                "GROQ_FAILOVER_COOLDOWN_SECONDS", 14400
+            ),
             "pinecone_api_key": _env("PINECONE_API_KEY"),
             "pinecone_index_name": _env("PINECONE_INDEX_NAME", "logistics-company-rag"),
             "pinecone_host": _env("PINECONE_HOST"),
@@ -163,6 +171,8 @@ class Settings:
         }
         alias_map = {
             "GROQ_API_KEY": "groq_api_key",
+            "GROQ_FALLBACK_API_KEY_1": "groq_fallback_api_key_1",
+            "GROQ_FALLBACK_API_KEY_2": "groq_fallback_api_key_2",
             "PINECONE_API_KEY": "pinecone_api_key",
             "PINECONE_INDEX_NAME": "pinecone_index_name",
             "PINECONE_HOST": "pinecone_host",
@@ -175,6 +185,14 @@ class Settings:
             values[alias_map.get(key, key)] = value
         for key, value in values.items():
             object.__setattr__(self, key, value)
+
+    def groq_api_keys(self) -> list[str]:
+        keys = [
+            self.groq_api_key,
+            self.groq_fallback_api_key_1,
+            self.groq_fallback_api_key_2,
+        ]
+        return list(dict.fromkeys(key.strip() for key in keys if key.strip()))
 
 
 @lru_cache

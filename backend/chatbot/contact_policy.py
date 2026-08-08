@@ -62,7 +62,7 @@ class ContactPolicy:
         explicit: bool,
     ) -> RenderedContact | None:
         age = memory.contact_age(resolution.contact.id)
-        if not explicit and age is not None and age <= 1:
+        if not explicit and age == 0:
             return None
 
         fields = self.fields_for(resolution.contact, analysis)

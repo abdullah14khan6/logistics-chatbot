@@ -7,6 +7,7 @@ from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pinecone import Pinecone, ServerlessSpec
+from pinecone.exceptions import NotFoundException
 
 from backend.config.settings import Settings
 from backend.ingestion.manifest import IngestionManifest, file_sha256
@@ -97,10 +98,18 @@ class IngestionPipeline:
         return documents
 
     def _delete_existing_document(self, index, document_name: str) -> None:
-        index.delete(
-            namespace=self.settings.pinecone_namespace,
-            filter={"document_name": {"$eq": document_name}},
-        )
+        try:
+            index.delete(
+                namespace=self.settings.pinecone_namespace,
+                filter={"document_name": {"$eq": document_name}},
+            )
+        except NotFoundException as exc:
+            if "Namespace not found" not in str(exc):
+                raise
+            logger.info(
+                "Namespace %s is empty; no existing vectors to delete",
+                self.settings.pinecone_namespace,
+            )
 
     @staticmethod
     def _section_title(text: str) -> str:

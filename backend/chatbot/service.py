@@ -57,6 +57,10 @@ PRICING_CONTEXT_INTENTS = {
     "transportation",
     "freight_forwarding",
 }
+CONSULTATIVE_SERVICE_INTENTS = {
+    "supplier_pickup",
+    "dangerous_goods",
+}
 
 
 @dataclass(frozen=True)
@@ -219,17 +223,27 @@ class ChatbotService:
             if pricing_text:
                 response_parts.append(pricing_text)
 
+        consultative_service_inquiry = bool(
+            set(analysis.intent_values()) & CONSULTATIVE_SERVICE_INTENTS
+        )
         contact_requested = (
             analysis.explicit_contact_request
             or analysis.needs_head_of_services
             or analysis.needs_handoff
             or analysis.needs_pricing
+            or consultative_service_inquiry
         )
         if contact_requested:
-            resolution = self.contact_policy.resolve(analysis)
+            if consultative_service_inquiry and not analysis.explicit_contact_request:
+                resolution = self.profile.resolve_contact(
+                    self.profile.default_contact_role
+                )
+            else:
+                resolution = self.contact_policy.resolve(analysis)
             explicit = (
                 analysis.explicit_contact_request
                 or analysis.needs_head_of_services
+                or consultative_service_inquiry
             )
             rendered_contact = self.contact_policy.render(
                 resolution,
@@ -280,6 +294,21 @@ class ChatbotService:
         analysis: IntentAnalysis,
         memory: ConversationMemory,
     ) -> IntentAnalysis:
+        if (
+            analyze_social_message(message) is None
+            and set(analysis.intent_values())
+            and set(analysis.intent_values()) <= SOCIAL_INTENTS
+        ):
+            analysis = IntentAnalysis(
+                dialogue_act="request",
+                intents=[DomainIntent.GENERAL_LOGISTICS],
+                actions=[PlannedAction.GENERAL_ANSWER],
+                general_logistics=True,
+                resolved_query=message,
+                query_for_rag=message,
+                confidence=min(analysis.confidence, 0.5),
+            )
+
         if (
             analysis.confidence == 0.0
             and analysis.unclear
@@ -414,6 +443,47 @@ class ChatbotService:
             "Do not add contact details, a generic closing, or an unsolicited service list.",
             "Ask no follow-up question; the controller handles clarifications.",
         ]
+        if set(analysis.intent_values()) & CONSULTATIVE_SERVICE_INTENTS:
+            instructions.extend(
+                [
+                    (
+                        "Treat this as a qualified service inquiry. Give a consultative answer "
+                        "of roughly 2 to 4 useful sentences when the evidence supports it."
+                    ),
+                    (
+                        "Explain the relevant service scope, important shipment or compliance "
+                        "considerations, and how Paramount Logistics can help. Be professionally "
+                        "sales-oriented without hype or unsupported promises."
+                    ),
+                    (
+                        "For a yes-or-no capability question, begin with a direct 'Yes' when "
+                        "supported. Do not restate the question, begin with 'Paramount Logistics "
+                        "offers', or explain an obvious service definition before giving the "
+                        "customer the useful next step."
+                    ),
+                    (
+                        "End the generated portion with a concise invitation to discuss the "
+                        "shipment requirements. The controller will append the authorized "
+                        "Head of Services contact details."
+                    ),
+                ]
+            )
+        if "supplier_pickup" in analysis.intent_values():
+            instructions.append(
+                "For supplier pickup, confirm the collection capability directly, then invite "
+                "the customer to provide the exact pickup location, cargo type, volume or "
+                "weight, and destination so operations can confirm the arrangement. Mention "
+                "onward services only when they materially answer the question. Do not narrate "
+                "routine coordination with suppliers or partners. Never mention evidence, "
+                "sources, or missing data."
+            )
+        if "dangerous_goods" in analysis.intent_values():
+            instructions.append(
+                "For lithium batteries or other dangerous goods, explain that acceptance is "
+                "subject to classification, applicable regulations, carrier approval, suitable "
+                "packaging, and required documents. Invite the customer to share battery type, "
+                "quantity, packing method, origin, and destination for an eligibility review."
+            )
         if repeated and not analysis.repeat_request:
             instructions.append(
                 "Build on prior information instead of restating the full explanation for: "

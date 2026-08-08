@@ -1,4 +1,5 @@
 from backend.config.settings import Settings
+from backend.llm.groq_failover import GroqFailoverClient
 from backend.prompts.rag import RAG_SYSTEM_PROMPT, RAG_USER_PROMPT
 
 
@@ -41,14 +42,10 @@ class GroqAnswerGenerator:
 
     def _client(self):
         if self._llm is None:
-            from langchain_groq import ChatGroq
-
-            self._llm = ChatGroq(
-                api_key=self.settings.groq_api_key,
+            self._llm = GroqFailoverClient(
+                self.settings,
                 model=self.settings.groq_model_name,
                 temperature=self.settings.groq_temperature,
                 max_tokens=self.settings.response_max_tokens,
-                timeout=self.settings.llm_timeout_seconds,
-                max_retries=self.settings.llm_max_retries,
             )
         return self._llm
