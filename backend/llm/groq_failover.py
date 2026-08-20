@@ -88,15 +88,22 @@ class GroqFailoverClient:
                         from langchain_groq import ChatGroq
 
                         factory = ChatGroq
-                    self._clients[index] = factory(
-                        api_key=self._api_keys[index],
-                        model=self.model,
-                        temperature=self.temperature,
-                        max_tokens=self.max_tokens,
-                        timeout=self.settings.llm_timeout_seconds,
-                        max_retries=self.settings.llm_max_retries,
-                    )
+                    client_kwargs = {
+                        "api_key": self._api_keys[index],
+                        "model": self.model,
+                        "temperature": self.temperature,
+                        "max_tokens": self.max_tokens,
+                        "timeout": self.settings.llm_timeout_seconds,
+                        "max_retries": self.settings.llm_max_retries,
+                    }
+                    if _is_qwen_model(self.model):
+                        client_kwargs["reasoning_effort"] = "none"
+                    self._clients[index] = factory(**client_kwargs)
         return self._clients[index]
+
+
+def _is_qwen_model(model: str) -> bool:
+    return "qwen" in model.strip().lower()
 
 
 def _is_retryable_groq_error(exc: Exception) -> bool:
