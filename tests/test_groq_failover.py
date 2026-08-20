@@ -169,3 +169,13 @@ def test_non_qwen_client_does_not_receive_reasoning_effort() -> None:
     pool.warmup()
 
     assert "reasoning_effort" not in captured_kwargs
+
+
+def test_default_models_use_qwen(monkeypatch) -> None:
+    monkeypatch.delenv("GROQ_MODEL_NAME", raising=False)
+    monkeypatch.delenv("INTENT_MODEL_NAME", raising=False)
+
+    configured = Settings()
+
+    assert configured.groq_model_name == "qwen/qwen3.6-27b"
+    assert configured.intent_model_name == "qwen/qwen3.6-27b"
